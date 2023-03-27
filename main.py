@@ -61,11 +61,50 @@ class maskFilter(nn.Module):
         """
         return f'y = {self.textMask.item()} + {self.audioMask.item()} + {self.videoMask.item()}'
 
+
+class maskFilter_2modals(nn.Module):
+    def __init__(self, in_size):
+        super().__init__()
+        if in_size == 447:
+            f1 = 100
+            f2 = 342           
+        elif in_size == 1687:
+            f1 = 100
+            f2 = 1582
+        elif in_size == 342 + 1582 + 5:
+            f1 = 342
+            f2 = 1582
+        tt, aa, vv  = 100, 442, 2024
+        # self.testM = nn.Parameter(torch.rand(in_size, in_size))
+        currentFeatures = np.asarray([0.0] * in_size)
+        f1Mask = np.copy(currentFeatures)
+        f1Mask[:f1] = 1.0
+        f2Mask = np.copy(currentFeatures)
+        f2Mask[f1: f1+f2] = 1.0
+        self.f1Mask = torch.from_numpy(f1Mask) * torch.tensor(2.0)
+        self.f1Mask = nn.Parameter(self.f1Mask).float().to(DEVICE)
+        
+        self.f2Mask = torch.from_numpy(f2Mask) * torch.tensor(2.0)
+        self.f2Mask = nn.Parameter(self.f2Mask).float().to(DEVICE)
+        
+    def forward(self, features):
+        return features * self.f1Mask + features * self.f2Mask
+
+    def string(self):
+        """
+        Just like any class in Python, you can also define custom method on PyTorch modules
+        """
+        return f'y = {self.f1Mask.item()} + {self.f2Mask.item()}'
+
 class GAT_FP(nn.Module):
-    def __init__(self, in_size, hid_size, out_size, wFP, numFP):
+    def __init__(self, in_size, hid_size, out_size, wFP, numFP, modals):
         super().__init__()
         gcv = [in_size, 256, 8]
-        self.maskFilter = maskFilter(in_size)
+        self.modals = modals
+        if len(self.modals) == 3:
+            self.maskFilter = maskFilter(in_size)
+        else:
+            self.maskFilter = maskFilter_2modals(in_size)
         self.num_heads = 4
         self.GATFP = dglnn.GraphConv(in_size,  in_size, norm = 'both', weight=False)
         self.gat1 = nn.ModuleList()
@@ -75,7 +114,10 @@ class GAT_FP(nn.Module):
                 dglnn.GATv2Conv(np.power(self.num_heads, ii) * gcv[ii],  gcv[ii+1], activation=F.relu,  residual=True, num_heads = self.num_heads)
             )
         coef = 1
-        self.gat2 = MultiHeadGATCrossModal(in_size,  gcv[-1], num_heads = self.num_heads)
+        if len(self.modals) == 3:
+            self.gat2 = MultiHeadGATCrossModal(in_size,  gcv[-1], num_heads = self.num_heads)
+        else:
+            self.gat2 = MultiHeadGATCross2Modal(in_size,  gcv[-1], num_heads = self.num_heads)
         # self.layers.append(dglnn.GraphConv(hid_size, 16))
         self.linear = nn.Linear(gcv[-1] * self.num_heads * 2, out_size)
         # self.linear = nn.Linear(gcv[-1] * self.num_heads * 7, out_size)
@@ -84,9 +126,6 @@ class GAT_FP(nn.Module):
     def forward(self, g):
         features = g.ndata["x"]
         h = features.float()
-        # mask = torch.zeros(h.shape)
-        # missIndx = torch.where(features==0)
-        # mask[missIndx] = 1
         h1 = self.GATFP(g, h)
         h = 0.5 * (h + h1)
         # h = h + h1
@@ -151,16 +190,26 @@ if __name__ == "__main__":
     parser.add_argument('--wFP', action='store_true', default=False, help='edge direction type')
     parser.add_argument('--numFP', help='number of FP layer', default=5, type=int)
     parser.add_argument('--numTest', help='number of test', default=10, type=int)
-    parser.add_argument('--batchSize', help='size of batch', default=1, type=int)
+    parser.add_argument('--batchSize', help='size of batch', default=32, type=int)
     parser.add_argument('--log', action='store_true', default=True, help='save experiment info in output')
     parser.add_argument('--output', help='savedFile', default='./log.txt')
-    parser.add_argument('--prePath', help='prepath to directory contain DGL files', default='.')
+    parser.add_argument('--prePath', help='prepath to directory contain DGL files', default='F:/dangkh/work/test/')
     parser.add_argument( "--dataset",
         type=str,
         default="IEMOCAP",
         help="Dataset name ('IEMOCAP', 'MELD').",
     )
+    parser.add_argument( "--modals",
+        type=str,
+        default="avl",
+        help="Dataset name ('av', 'vl', 'al').",
+    )
     args = parser.parse_args()
+
+    if args.modals not in ['av', 'vl', 'al', 'avl']:
+
+        raise Exception("Modals must be in list")
+
     print(f"Training with DGL built-in GraphConv module.")
     torch.cuda.empty_cache()
     info = {
@@ -187,7 +236,7 @@ if __name__ == "__main__":
             sourceFile.close()
                  
         dataPath  = './IEMOCAP_features/IEMOCAP_features.pkl'
-        data = emotionDataset(missing = args.missing, path = dataPath)
+        data = emotionDataset(missing = args.missing, path = dataPath, modals = args.modals)
         trainSet, testSet = data.trainSet, data.testSet
         trainLoader = GraphDataLoader( dataset=trainSet, batch_size=args.batchSize, shuffle=True)
         testLoader = GraphDataLoader( dataset=testSet, batch_size=args.batchSize)
@@ -196,7 +245,7 @@ if __name__ == "__main__":
         # create GCN model
         in_size = data.in_size
         out_size = data.out_size 
-        model = GAT_FP(in_size, 128, out_size, args.wFP, args.numFP).to(DEVICE)    
+        model = GAT_FP(in_size, 128, out_size, args.wFP, args.numFP, args.modals).to(DEVICE)    
         print(model)
         # model training
         print("Training...")

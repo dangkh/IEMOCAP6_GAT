@@ -146,3 +146,65 @@ def getPositionEncoding(seq_len, d, n=10000):
             P[k, 2*i+1] = np.cos(k/denominator)
     return P
  
+
+def missingParam(percent, numModals = 3):
+    if numModals == 3:
+        al, be , ga = 0, 0, 0
+        for aa in range(1, 200):
+            for bb in range(1, 200):
+                for gg in range(200):
+                    if (aa+bb+gg) != 0:
+                        if abs(((bb*3 + gg * 6) * 100.0 / (aa*9 + bb*9 + gg*9)) - percent) <= 1.0:
+                            return aa, bb, gg
+        return al, be, ga
+    else:
+        al, be  = 0, 0
+        for aa in range(1, 200):
+            for bb in range(1, 200):
+                if (aa+bb) != 0:
+                    if abs(((bb*2) * 100.0 / (aa*2 + bb*4)) - percent) <= 1.0:
+                        return aa, bb       
+        return al, be
+
+def genMissMultiModal(matSize, percent):
+    missPercent = 100
+    al, be, ga = missingParam(percent)
+    if matSize[0] != 3:
+        al, be = missingParam(percent, 2)
+
+    errPecent = 1.7
+    if matSize[-1] <= 5:
+        errPecent = 5
+    if matSize[-1] <= 3:
+        errPecent = 10
+    listMask = []
+    masks = [np.asarray([[0, 0, 0]]), np.asarray([[0, 0, 1], [0, 1, 0], [1, 0, 0]]), np.asarray([[0, 1, 1], [1, 1, 0], [1, 0, 1]])]
+    if matSize[0] == 3:
+        masks = [np.asarray([[0, 0, 0]]), np.asarray([[0, 0, 1], [0, 1, 0], [1, 0, 0]]), np.asarray([[0, 1, 1], [1, 1, 0], [1, 0, 1]])]
+        if percent > 60:
+            masks = [np.asarray([[0, 0, 0]]), np.asarray([[0, 0, 1], [0, 1, 0], [1, 0, 0]]), np.asarray([[0, 1, 1], [1, 1, 0], [1, 0, 1]]*7)]
+        for mask, num in ([0, al], [1, be], [2, ga]):
+            if num > 0:
+                listMask.append(np.repeat(masks[mask], num, axis = 0))
+    else:
+        masks = [np.asarray([[0, 0]]), np.asarray([[0, 1], [1, 0]])]
+        if percent >= 40:
+            masks = [np.asarray([[0, 0]]), np.asarray([[0, 1], [1, 0]] * 10)]
+        for mask, num in ([0, al], [1, be]):
+            if num > 0:
+                listMask.append(np.repeat(masks[mask], num, axis = 0))
+    
+    missType = np.vstack(listMask)
+    counter = 0
+    while np.abs(missPercent - percent) > 1.0:
+        mat = np.zeros((matSize[0], matSize[-1]))
+        for ii in range(matSize[-1]):
+            tmp = random.randint(0, len(missType)-1)
+            mat[:,ii] = missType[tmp]
+        missPercent = mat.sum() / (matSize[0] * matSize[-1]) * 100
+        # print(missPercent, errPecent, matSize[-1])
+        if (np.abs(missPercent - percent) < errPecent):
+            return mat
+    print("FALSE GENERATING MISSING MASK")
+    return "ERROR"
+    return np.zeros((matSize[0], matSize[-1]))

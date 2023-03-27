@@ -155,17 +155,8 @@ class MultiHeadGATInnerLayer(nn.Module):
 class crossModal(nn.Module):
     def __init__(self, in_dim, out_dim):
         super(crossModal, self).__init__()
-        currentFeatures = np.asarray([0.0] * in_dim)
         tt, aa, vv  = 100, 442, 2029
-        if in_dim == 1247:
-            tt, aa, vv  = 600, 942, 1247
         self.tt, self.aa, self.vv = tt, aa, vv
-        textMask = np.copy(currentFeatures)
-        textMask[:tt] = 1.0
-        audioMask = np.copy(currentFeatures)
-        audioMask[tt: vv] = 1.0
-        videoMask = np.copy(currentFeatures)
-        videoMask[vv:] = 1.0
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.qMaskT = nn.Linear(tt, out_dim, bias=False)
@@ -206,9 +197,9 @@ class crossModal(nn.Module):
         return attVal
 
     def forward(self, g, h):
-        attT = self.unitAtt(self.qMaskT, self.kMaskA, self.vMaskA, h[:,:self.tt], h[:,self.tt:self.aa])
-        attA = self.unitAtt(self.qMaskA, self.kMaskT, self.vMaskT, h[:,self.tt:self.aa], h[:,:self.tt])
-        attV = self.unitAtt(self.qMaskV, self.kMaskT, self.vMaskT, h[:,self.aa:], h[:,:self.tt])
+        attT = self.unitAtt(self.qMaskT, self.kMaskA, self.kMaskA, h[:,:self.tt], h[:,self.tt:self.aa])
+        attA = self.unitAtt(self.qMaskA, self.kMaskA, self.kMaskA, h[:,self.tt:self.aa], h[:,self.tt:self.aa])
+        attV = self.unitAtt(self.qMaskV, self.kMaskA, self.kMaskA, h[:,self.aa:], h[:,self.tt:self.aa])
         att = torch.cat((attT, attA, attV), dim = 1)
         # att = torch.mean(torch.stack([attT,attA,attV], 1), 1)
         att = self.ln(att)
@@ -220,6 +211,79 @@ class MultiHeadGATCrossModal(nn.Module):
         self.heads = nn.ModuleList()
         for i in range(num_heads):
             self.heads.append(crossModal(in_dim, out_dim))
+        self.merge = merge
+
+    def forward(self, g, h):
+        head_outs = [attn_head(g, h) for attn_head in self.heads]
+        if self.merge == 'cat':
+            # concat on the output feature dimension (dim=1)
+            return torch.cat(head_outs, dim=1)
+        else:
+            # merge using average
+            return torch.mean(torch.stack(head_outs))
+
+
+class cross2Modal(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super(cross2Modal, self).__init__()
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+
+        if in_dim == 447:
+            f1 = 100
+            f2 = 342           
+        elif in_dim == 1687:
+            f1 = 100
+            f2 = 1582
+        elif in_dim == 342 + 1582 + 5:
+            f1 = 342
+            f2 = 1582
+
+        self.f1, self.f2 = f1, f2
+        self.qMaskf1 = nn.Linear(f1, out_dim, bias=False)
+        self.qMaskf2 = nn.Linear(f2, out_dim, bias=False)
+        self.kMaskf1 = nn.Linear(f1, out_dim, bias=False)
+        self.kMaskf2 = nn.Linear(f2, out_dim, bias=False)
+        self.vMaskf1 = nn.Linear(f1, out_dim, bias=False)
+        self.vMaskf2 = nn.Linear(f2, out_dim, bias=False)
+        self.ln = nn.Linear(out_dim * 2, out_dim, bias = True)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        """Reinitialize learnable parameters."""
+        gain = nn.init.calculate_gain('relu')
+        nn.init.xavier_normal_(self.qMaskf1.weight, gain=gain)
+        nn.init.xavier_normal_(self.qMaskf2.weight, gain=gain)
+        nn.init.xavier_normal_(self.kMaskf1.weight, gain=gain)
+        nn.init.xavier_normal_(self.kMaskf2.weight, gain=gain)
+        nn.init.xavier_normal_(self.vMaskf1.weight, gain=gain)
+        nn.init.xavier_normal_(self.vMaskf2.weight, gain=gain)
+
+    def unitAtt(self, q, k, v, feature, referFt):
+        qVal = q(feature)
+        kVal = k(referFt)
+        vVal = v(referFt)
+        qVal = torch.unsqueeze(qVal, 2)
+        kVal = torch.unsqueeze(kVal, 1)
+        score = (qVal @ kVal)  / np.sqrt(self.out_dim)
+        score = F.softmax(score, dim=1)
+        origin = torch.unsqueeze(vVal, 2)
+        attVal = torch.bmm(score, origin).sum(dim = 2)
+        return attVal
+
+    def forward(self, g, h):
+        attf1 = self.unitAtt(self.qMaskf1, self.kMaskf2, self.vMaskf2, h[:,:self.f1], h[:,self.f1: self.f1+self.f2])
+        attf2 = self.unitAtt(self.qMaskf2, self.kMaskf1, self.vMaskf1, h[:,self.f1:self.f1+self.f2], h[:,:self.f1])
+        att = torch.cat((attf1, attf2), dim = 1)
+        att = self.ln(att)
+        return att
+       
+class MultiHeadGATCross2Modal(nn.Module):
+    def __init__(self, in_dim, out_dim, num_heads, merge='cat'):
+        super(MultiHeadGATCross2Modal, self).__init__()
+        self.heads = nn.ModuleList()
+        for i in range(num_heads):
+            self.heads.append(cross2Modal(in_dim, out_dim))
         self.merge = merge
 
     def forward(self, g, h):
