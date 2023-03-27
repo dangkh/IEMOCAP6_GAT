@@ -1,0 +1,6 @@
+
+__pycache__/dataloader.cpython-310.pyc
+*.pyc
+*.txt
+*.pkl
+*.npy
