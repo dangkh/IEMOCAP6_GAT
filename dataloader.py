@@ -33,6 +33,7 @@ class MeldDGL(DGLDataset):
             for idx, x in enumerate(self.Vid):
                 numUtterance = len(self.videoLabels[x])
                 self.listMask.append(mask[currentUt:currentUt+numUtterance])
+                currentUt += numUtterance
         else:
             for idx, x in enumerate(self.Vid):
                 numUtterance = len(self.videoLabels[x])
