@@ -156,7 +156,7 @@ class crossModal(nn.Module):
     def __init__(self, in_dim, out_dim):
         super(crossModal, self).__init__()
         currentFeatures = np.asarray([0.0] * in_dim)
-        tt, aa, vv  = 100, 442, 2029
+        tt, aa, vv  = 64, 128, 192
         if in_dim == 1247:
             tt, aa, vv  = 600, 942, 1247
         self.tt, self.aa, self.vv = tt, aa, vv
