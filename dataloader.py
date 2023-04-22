@@ -212,7 +212,6 @@ class Iemocap6_Gcnet_Dataset():
         self.process()
 
     def process(self):
-        seed_everything(self.info['seed'])
         videoIDs, videoLabels, videoSpeakers, videoSentence, trainVid, testVid = pickle.load(open(self.path, "rb"), encoding='latin1')
         self.trainVids = sorted(trainVid)
         self.testVids = sorted(testVid)
