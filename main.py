@@ -72,9 +72,9 @@ class GAT_FP(nn.Module):
         self.in_size = 192
         self.outMMEncoder = 4
         self.MMEncoder = nn.LSTM(self.in_size, self.outMMEncoder, bidirectional = True).to(torch.float64)
-        gcv = [self.in_size, 256, 8]
+        gcv = [self.in_size, 32, 4]
         self.maskFilter = maskFilter(self.in_size)
-        self.num_heads = 4
+        self.num_heads = 16
         self.GATFP = dglnn.GraphConv(self.in_size,  self.in_size, norm = 'both', weight=False)
         self.gat1 = nn.ModuleList()
         # two-layer GCN
@@ -84,7 +84,7 @@ class GAT_FP(nn.Module):
             )
         coef = 1
         self.gat2 = MultiHeadGATCrossModal(self.in_size,  gcv[-1], num_heads = self.num_heads)
-        self.linear = nn.Linear(72, out_size)
+        self.linear = nn.Linear(136, out_size).to(torch.float64)
         # self.linear = nn.Linear(gcv[-1] * self.num_heads * 7, out_size)
         self.dropout = nn.Dropout(0.5)
 
@@ -94,7 +94,9 @@ class GAT_FP(nn.Module):
         audio = audio.to(torch.float64)
         video = g.ndata["vision"]
         video = video.to(torch.float64)
-
+        # text =norm(text)
+        # audio =norm(audio)
+        # video =norm(video)
         audioOuput = self.audioEncoder(audio)
         audioOuput = self.dropAudio(audioOuput)
         
@@ -102,7 +104,7 @@ class GAT_FP(nn.Module):
         
         visionOutput = self.dropVision(visionOutput)
         textOutput = self.textEncoder(text)
-        stackFT = torch.hstack([textOutput, audioOuput, visionOutput]).float()  
+        stackFT = torch.hstack([textOutput, audioOuput, visionOutput]).to(torch.float64)
         newFeature = stackFT.view(-1, 120, self.in_size).to(torch.float64)
         newFeature = newFeature.permute(1, 0, 2)
         newFeature, _ = self.MMEncoder(newFeature)
@@ -126,7 +128,7 @@ class GAT_FP(nn.Module):
             h = layer(g, h)
         
         h = torch.reshape(h, (len(h), -1))
-        h = torch.cat((newFeature,h,h3), 1).float()
+        h = torch.cat((h,newFeature,h3), 1)
         h = self.linear(h)
         return h
 
@@ -209,6 +211,7 @@ if __name__ == "__main__":
         else:
             setSeed = int(args.seed)
         seed_everything(seed=setSeed)
+        info['seed'] = setSeed
         if args.log:
             sourceFile = open(args.output, 'a')
             print('*'*10, 'INFO' ,'*'*10, file = sourceFile)
@@ -226,9 +229,16 @@ if __name__ == "__main__":
         dataPath  = f'./IEMOCAP/IEMOCAP_features_raw_{numLB}way.pkl'
         data = Iemocap6_Gcnet_Dataset(missing = args.missing, path = dataPath, info = info)
         trainSet, testSet = data.trainSet, data.testSet
-        trainLoader = GraphDataLoader( dataset=trainSet, batch_size=args.batchSize, shuffle=True)
-        testLoader = GraphDataLoader( dataset=testSet, batch_size=args.batchSize)
+        g = torch.Generator()
+        g.manual_seed(setSeed)
 
+        trainLoader = GraphDataLoader(  dataset=trainSet, 
+                                        batch_size=args.batchSize, 
+                                        shuffle=True, 
+                                        generator=g)
+        testLoader = GraphDataLoader(   dataset=testSet, 
+                                        batch_size=args.batchSize,
+                                        generator=g)
 
         # create GCN model
         out_size = data.out_size 
