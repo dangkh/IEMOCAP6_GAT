@@ -4,3 +4,4 @@ __pycache__/dataloader.cpython-310.pyc
 *.txt
 *.pkl
 *.npy
+*.csv

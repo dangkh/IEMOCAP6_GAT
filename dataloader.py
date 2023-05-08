@@ -8,135 +8,10 @@ import random
 from ultis import *
 import pickle
 
-class MeldDGL(DGLDataset):
-    def __init__(self, Vid, videoLabels, normed_node_features, node_label, missing, training = False):
-        self.Vid = Vid
-        self.videoLabels = videoLabels
-        self.node_features = normed_node_features
-        self.node_label = node_label
-        self.training = training
-        self.mergeGraph = 8
-        self.vid2Idx = []
-        for idx, x in enumerate(self.Vid):
-            self.vid2Idx.append(x)
-        self.startNode = [0]
-        for idx, x in enumerate(self.Vid):
-            self.startNode.append(self.startNode[-1]+len(self.videoLabels[x]))
-        self.maxNode = 900
-        self.missing = missing
-        self.listMask = []
-        randSTR = random.randint(0, 1000)
-        missingPath = f'missing_{self.missing}_rand_{randSTR}.npy'
-        if os.path.isfile(missingPath):
-            mask = np.load(missingPath, allow_pickle=True)
-            currentUt = 0
-            for idx, x in enumerate(self.Vid):
-                numUtterance = len(self.videoLabels[x])
-                self.listMask.append(mask[currentUt:currentUt+numUtterance])
-                currentUt += numUtterance
-        else:
-            for idx, x in enumerate(self.Vid):
-                numUtterance = len(self.videoLabels[x])
-                self.listMask.append(genMissMultiModal((3, numUtterance), self.missing))
-            np.save(missingPath, np.hstack(self.listMask))
-        super().__init__(name='dataset_DGL')
-
-
-    def __getitem__(self, idx):
-        if self.training:
-            start = min(idx * self.mergeGraph, len(self.Vid))
-            end = min((idx+1) * self.mergeGraph, len(self.Vid))
-            listGraph = []
-            totalNode = 0
-            for graphidx in range(start, end):
-                features  = self.node_features[self.startNode[idx]: self.startNode[idx+1]]
-                mask = self.listMask[idx]
-                for ii in range(len(features)):
-                    currentFeatures = features[ii]
-                    tt, aa, vv  = 100, 442, 2024
-                    text = currentFeatures[:tt]
-                    audio = currentFeatures[tt: aa]
-                    video = currentFeatures[aa: vv]
-                    if mask[0][ii] == 1:
-                        text[:] = 0
-                    if mask[1][ii] == 1:
-                        audio[:] = 0
-                    if mask[2][ii] == 1:
-                        video[:] = 0
-                numNode = len(features)
-                totalNode += numNode
-                src = []
-                dst = []
-
-                for node in range(numNode):
-                    for nodeAdj in range(numNode):
-                        src.append(node)
-                        dst.append(nodeAdj)
-                features = torch.from_numpy(features).float()
-                labels = np.asarray(self.videoLabels[self.vid2Idx[idx]])
-                labels = torch.from_numpy(labels).float()
-                g = dgl.graph((src, dst))
-                g.ndata["x"] = features
-                g.ndata["label"] = labels
-                listGraph.append(g)
-
-            numNode = totalNode
-            compensationF = torch.zeros(self.maxNode-numNode, self.node_features.shape[-1])
-            compensation = torch.ones(self.maxNode-numNode)*6
-            src = []
-            dst = []
-            for ii in range(self.maxNode-numNode):
-                src.append(ii)
-                dst.append(ii)
-            g = dgl.graph((src, dst))
-            g.ndata["x"] = compensationF.float()
-            g.ndata["label"] = compensation.float()
-            listGraph.append(g)
-            returnGraph = dgl.batch(listGraph)
-            return returnGraph, returnGraph.ndata["x"], returnGraph.ndata["label"]
-        else:
-            features  = self.node_features[self.startNode[idx]: self.startNode[idx+1]]
-            mask = self.listMask[idx]
-            for ii in range(len(features)):
-                currentFeatures = features[ii]
-                tt, aa, vv  = 100, 442, 2024
-                text = currentFeatures[:tt]
-                audio = currentFeatures[tt: aa]
-                video = currentFeatures[aa: vv]
-                if mask[0][ii] == 1:
-                    text[:] = 0
-                if mask[1][ii] == 1:
-                    audio[:] = 0
-                if mask[2][ii] == 1:
-                    video[:] = 0
-            numNode = len(features)
-            src = []
-            dst = []
-
-            for node in range(numNode):
-                for nodeAdj in range(numNode):
-                    src.append(node)
-                    dst.append(nodeAdj)
-            for ii in range(numNode, self.maxNode):
-                src.append(ii)
-                dst.append(ii)
-
-            compensationF = torch.zeros(self.maxNode-numNode, features.shape[-1])
-            compensation = torch.ones(self.maxNode-numNode)*6
-            features = torch.from_numpy(features)
-            features = torch.vstack((features, compensationF))
-            labels = np.asarray(self.videoLabels[self.vid2Idx[idx]])
-            labels = torch.from_numpy(labels)
-            labels = torch.hstack((labels, compensation))
-            g = dgl.graph((src, dst))
-            g.ndata["x"] = features
-            g.ndata["label"] = labels
-            return g, features, labels
-
-    def __len__(self):
-        return ( len(self.Vid) // self.mergeGraph ) + 1
-
-
+import glob
+import tqdm
+import pandas as pd
+from torch.nn.utils.rnn import pad_sequence
 
 def missingParam(percent):
     al, be , ga = 0, 0, 0
@@ -181,55 +56,178 @@ def genMissMultiModal(matSize, percent):
         if (np.abs(missPercent - percent) < errPecent) & (np.abs(missPercent - percent) > 0):
             return mat
     return np.zeros((matSize[0], matSize[-1]))
+        
 
-class emotionDataset():
-    def __init__(self, path = './MELD_features/MELD_features.pkl', missing = 0):
-        super(emotionDataset, self).__init__()
+def read_data(label_path, feature_root):
+
+    ## gain (names, speakers)
+    names = []
+    videoIDs, videoLabels, videoSpeakers, videoSentence, trainVid, testVid = pickle.load(open(label_path, "rb"), encoding='latin1')
+    for ii, vid in enumerate(videoIDs):
+        uids_video = videoIDs[vid]
+        names.extend(uids_video)
+
+    ## (names, speakers) => features
+    features = []
+    feature_dim = -1
+    for ii, name in enumerate(names):
+        feature = []
+        feature_path = os.path.join(feature_root, name+'.npy')
+        feature_dir = os.path.join(feature_root, name)
+        if os.path.exists(feature_path):
+            single_feature = np.load(feature_path)
+            single_feature = single_feature.squeeze() # [Dim, ] or [Time, Dim]
+            feature.append(single_feature)
+            feature_dim = max(feature_dim, single_feature.shape[-1])
+        else: ## exists dir, faces
+            facenames = os.listdir(feature_dir)
+            for facename in sorted(facenames):
+                facefeat = np.load(os.path.join(feature_dir, facename))
+                feature_dim = max(feature_dim, facefeat.shape[-1])
+                feature.append(facefeat)
+        # sequeeze features
+        single_feature = np.array(feature).squeeze()
+        if len(single_feature) == 0:
+            single_feature = np.zeros((feature_dim, ))
+        elif len(single_feature.shape) == 2:
+            single_feature = np.mean(single_feature, axis=0)
+        features.append(single_feature)
+
+    ## save (names, features)
+    print (f'Input feature {os.path.basename(feature_root)} ===> dim is {feature_dim}; No. sample is {len(names)}')
+    assert len(names) == len(features), f'Error: len(names) != len(features)'
+    name2feats = {}
+    for ii in range(len(names)):
+        name2feats[names[ii]] = features[ii]
+
+    return name2feats, feature_dim
+
+
+class IEMOCAP6DGL_GCNET(DGLDataset):
+    def __init__(self, trainVids, videoIDs, videoLabels, name2audio, name2text, name2video, missing):
+        
+        self.trainVids = trainVids
+        self.videoIDs = videoIDs
+        self.videoLabels = videoLabels
+        self.missing = missing
+        self.name2audio, self.name2text, self.name2video, = name2audio, name2text, name2video
+        self.listMask = []
+        self.maxSize = 120
+        randSTR = random.randint(0, 1000)
+        self.listNumNode = []
+        for ii in range(len(self.trainVids)):
+            name = self.trainVids[ii]
+            self.listNumNode.append(len(self.videoIDs[name]))
+
+        tmpLb = []
+        for ii, v in enumerate(videoLabels):
+            tmpLb.extend(videoLabels[v])
+        self.out_size = len(np.unique(np.asarray(tmpLb)))
+
+        missingPath = f'./mmask/missing_{self.missing}_rand_{randSTR}.npy'
+        if os.path.isfile(missingPath):
+            mask = np.load(missingPath, allow_pickle=True)
+            currentUt = 0
+            for idx, numNode in enumerate(self.listNumNode):
+                self.listMask.append(mask[:,currentUt:currentUt+numNode])
+                currentUt += numNode
+        else:
+            for idx, numNode in enumerate(self.listNumNode):
+                mask = genMissMultiModal((3, numNode), self.missing)
+                self.listMask.append(mask)
+            np.save(missingPath, np.hstack(self.listMask))
+        super().__init__(name='dataset_DGL')
+
+
+    def __getitem__(self, index):
+        name = self.trainVids[index]
+        textf = []
+        audiof = []
+        visionf = []
+        for i, vid in enumerate(self.videoIDs[name]):
+            textf.append(np.copy(self.name2text[vid]))
+            audiof.append(np.copy(self.name2audio[vid]))
+            visionf.append(np.copy(self.name2video[vid]))
+        text = np.vstack(textf)
+        audio = np.vstack(audiof)
+        vision = np.vstack(visionf)
+        numNode = len(text)
+        missingMask = self.listMask[index]
+        for ii in range(numNode):
+            if missingMask[0][ii] == 1:
+                text[ii] = 0
+            if missingMask[1][ii] == 1:
+                audio[ii] = 0
+            if missingMask[2][ii] == 1:
+                vision[ii] = 0
+
+        labels = np.asarray(self.videoLabels[name])
+        src = []
+        dst = []
+
+        for node in range(numNode):
+            for nodeAdj in range(node, numNode+1):
+                src.append(node)
+                dst.append(nodeAdj)
+        outSize = self.maxSize
+
+        for ii in range(numNode, outSize):
+            src.append(ii)
+            dst.append(ii)
+
+        def compensation(features, size):
+            shape = features.shape
+            compensationF = torch.zeros(size-shape[0], shape[1])
+            features = torch.from_numpy(features)
+            features = torch.vstack((features, compensationF))
+            return features
+
+        text = compensation(text, outSize)
+        audio = compensation(audio, outSize)
+        vision = compensation(vision, outSize)
+        
+        compensation = torch.ones(self.maxSize-numNode)*self.out_size
+        labels = torch.from_numpy(labels)
+        labels = torch.hstack((labels, compensation))
+
+
+        g = dgl.graph((src, dst))
+        g.ndata["text"] = text.to(torch.float64)
+        g.ndata["audio"] = audio.to(torch.float64)
+        g.ndata["vision"] = vision.to(torch.float64)
+        g.ndata["label"] = labels.to(torch.float64)
+        return g, labels
+
+    def __len__(self):
+        return len(self.trainVids) 
+
+
+class Iemocap6_Gcnet_Dataset():
+
+    def __init__(self, path = './IEMOCAP/IEMOCAP_features_raw_6way.pkl', missing = 0, info = None):
+        super(Iemocap6_Gcnet_Dataset, self).__init__()
         self.missing = missing
         self.path = path
+        self.info = info
         self.process()
 
-    def extractNode(self, x1, x2, x3, x4):
-        text = np.asarray(x1)
-        audio = np.asarray(x2)
-        video = np.asarray(x3)
-        speakers = torch.FloatTensor([[1]*5 if x=='M' else [0]*5 for x in x4])
-        # 100, 342, 1582, 5
-        # 600, 342, 300, 5
-        output = np.hstack([text, audio, video, speakers])
-        return output    
-
-
     def process(self):
-        self.subIdTrain, self.subIdTest = [], []
-        inputData = pickle.load(open(self.path, 'rb'), encoding='latin1')
-        self.videoIDs, self.videoSpeakers, self.videoLabels, self.videoText,\
-            self.videoAudio, self.videoVisual, self.videoSentence, self.trainVid,\
-            self.testVid = inputData
-        
-        
-        numSubGraph = len(self.trainVid) + len(self.testVid)
-        numNodeTrain = sum([len(self.videoText[x]) for x in self.trainVid])
-        numNodeTest = sum([len(self.videoText[x]) for x in self.testVid])
-        numberNode = numNodeTest + numNodeTrain
+        videoIDs, videoLabels, videoSpeakers, videoSentence, trainVid, testVid = pickle.load(open(self.path, "rb"), encoding='latin1')
+        self.trainVids = sorted(trainVid)
+        self.testVids = sorted(testVid)
 
-        node_featuresTrain = np.vstack([self.extractNode(self.videoText[x], self.videoVisual[x], \
-            self.videoAudio[x], self.videoSpeakers[x]) for x in self.trainVid])
-        node_featuresTest = np.vstack([self.extractNode(self.videoText[x], self.videoVisual[x], \
-            self.videoAudio[x], self.videoSpeakers[x]) for x in self.testVid])
-        node_features = np.vstack([node_featuresTrain, node_featuresTest])
-        # feature normalization
-        # node_featuresTrain = normMat(node_featuresTrain, node_featuresTrain)
-        # node_featuresTest = normMat(node_featuresTest, node_featuresTest)
-
-        node_labelTrain = np.hstack([np.asarray(self.videoLabels[x]) for x in self.trainVid])
-        node_labelTest = np.hstack([np.asarray(self.videoLabels[x]) for x in self.testVid])
-        # node_labels = np.hstack([node_labelTrain, node_labelTest])
+        tmpLb = []
+        for ii, v in enumerate(videoLabels):
+            tmpLb.extend(videoLabels[v])
 
 
+        name2audio, adim = read_data(self.path, f'./IEMOCAP/features/wav2vec-large-c-UTT')
+        name2text, tdim = read_data(self.path, f'./IEMOCAP/features/deberta-large-4-UTT')
+        name2video, vdim = read_data(self.path, f'./IEMOCAP/features/manet_UTT')
 
-        self.trainSet = MeldDGL(self.trainVid, self.videoLabels, node_featuresTrain, node_labelTrain, self.missing, True)
-        self.testSet = MeldDGL(self.testVid, self.videoLabels, node_featuresTest, node_labelTest, self.missing, False)
-        self.in_size = node_features.shape[-1]
-        self.out_size = len(np.unique(node_labelTrain))+1
-        
+        self.trainSet = IEMOCAP6DGL_GCNET(self.trainVids, videoIDs, videoLabels, name2audio, name2text, name2video, self.missing)
+        self.testSet = IEMOCAP6DGL_GCNET(self.testVids, videoIDs, videoLabels, name2audio, name2text, name2video, self.missing)
+
+        self.out_size = len(np.unique(np.asarray(tmpLb)))
+
+

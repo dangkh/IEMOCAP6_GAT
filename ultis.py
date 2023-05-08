@@ -101,20 +101,16 @@ def vis(info):
     # _lg.remove()
     plt.show()
 
-def evaluate(dataloader, model):
+def evaluate(dataloader, model, numLB):
     counter = 0
     total = 0
     preds = []
     trueLabel = []
-    labelRM = 6
     for batch_idx, batch in enumerate(tqdm(dataloader)):
-        g, dataset_idx, labels = batch
+        g, labels = batch
         labels = g.ndata["label"]
         labels = labels.type(torch.LongTensor)   
         trueLabel.extend(labels.cpu().numpy())
-        # a = labels.cpu().numpy()
-        # pos = np.where(a != labelRM)
-        # total += len(pos[0])
         g = g.to(DEVICE)
         with torch.no_grad():
             model.eval()
@@ -124,7 +120,7 @@ def evaluate(dataloader, model):
             preds.extend(res.cpu().numpy())
     trueLabel = np.asarray(trueLabel)
     preds = np.asarray(preds)
-    pos = np.where(trueLabel != labelRM)
+    pos = np.where(trueLabel != numLB)
     preds = preds[pos]
     trueLabel = trueLabel[pos]
     return f1_score(trueLabel, preds, average='weighted')

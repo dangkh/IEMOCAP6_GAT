@@ -33,7 +33,7 @@ def checkMissing(data):
 class maskFilter(nn.Module):
     def __init__(self, in_size):
         super().__init__()
-        tt, aa, vv  = 100, 442, 2024
+        tt, aa, vv  = 64, 128, 192
         # self.testM = nn.Parameter(torch.rand(in_size, in_size))
         currentFeatures = np.asarray([0.0] * in_size)
         textMask = np.copy(currentFeatures)
@@ -62,12 +62,20 @@ class maskFilter(nn.Module):
         return f'y = {self.textMask.item()} + {self.audioMask.item()} + {self.videoMask.item()}'
 
 class GAT_FP(nn.Module):
-    def __init__(self, in_size, hid_size, out_size, wFP, numFP):
+    def __init__(self, out_size, wFP, numFP):
         super().__init__()
-        gcv = [in_size, 256, 8]
-        self.maskFilter = maskFilter(in_size)
-        self.num_heads = 4
-        self.GATFP = dglnn.GraphConv(in_size,  in_size, norm = 'both', weight=False)
+        self.audioEncoder = nn.Linear(512, 64).to(torch.float64)
+        self.dropAudio = nn.Dropout(0.5)
+        self.visionEncoder = nn.Linear(1024, 64).to(torch.float64)
+        self.dropVision = nn.Dropout(0.5)
+        self.textEncoder = nn.Linear(1024, 64).to(torch.float64)
+        self.in_size = 192
+        self.outMMEncoder = 4
+        self.MMEncoder = nn.LSTM(self.in_size, self.outMMEncoder, bidirectional = True).to(torch.float64)
+        gcv = [self.in_size, 32, 4]
+        self.maskFilter = maskFilter(self.in_size)
+        self.num_heads = 16
+        self.GATFP = dglnn.GraphConv(self.in_size,  self.in_size, norm = 'both', weight=False)
         self.gat1 = nn.ModuleList()
         # two-layer GCN
         for ii in range(len(gcv)-1):
@@ -75,18 +83,37 @@ class GAT_FP(nn.Module):
                 dglnn.GATv2Conv(np.power(self.num_heads, ii) * gcv[ii],  gcv[ii+1], activation=F.relu,  residual=True, num_heads = self.num_heads)
             )
         coef = 1
-        self.gat2 = MultiHeadGATCrossModal(in_size,  gcv[-1], num_heads = self.num_heads)
-        # self.layers.append(dglnn.GraphConv(hid_size, 16))
-        self.linear = nn.Linear(gcv[-1] * self.num_heads * 2, out_size)
+        self.gat2 = MultiHeadGATCrossModal(self.in_size,  gcv[-1], num_heads = self.num_heads)
+        self.linear = nn.Linear(136, out_size).to(torch.float64)
         # self.linear = nn.Linear(gcv[-1] * self.num_heads * 7, out_size)
         self.dropout = nn.Dropout(0.5)
 
     def forward(self, g):
-        features = g.ndata["x"]
-        h = features.float()
-        # mask = torch.zeros(h.shape)
-        # missIndx = torch.where(features==0)
-        # mask[missIndx] = 1
+        text = g.ndata["text"].to(torch.float64)
+        audio = g.ndata["audio"]
+        audio = audio.to(torch.float64)
+        video = g.ndata["vision"]
+        video = video.to(torch.float64)
+        # text =norm(text)
+        # audio =norm(audio)
+        # video =norm(video)
+        audioOuput = self.audioEncoder(audio)
+        audioOuput = self.dropAudio(audioOuput)
+        
+        visionOutput = self.visionEncoder(video)
+        
+        visionOutput = self.dropVision(visionOutput)
+        textOutput = self.textEncoder(text)
+        stackFT = torch.hstack([textOutput, audioOuput, visionOutput]).to(torch.float64)
+        newFeature = stackFT.view(-1, 120, self.in_size).to(torch.float64)
+        newFeature = newFeature.permute(1, 0, 2)
+        newFeature, _ = self.MMEncoder(newFeature)
+        newFeature = newFeature.permute(1, 0, 2)
+        newFeature = newFeature.reshape(-1, self.outMMEncoder*2)  
+
+        # stackFT = torch.hstack([text, audio, video]).float()  
+        # stackFT = stackFT.view(-1, 100, self.in_size).to(torch.float64)
+        h = stackFT.float()
         h1 = self.GATFP(g, h)
         h = 0.5 * (h + h1)
         # h = h + h1
@@ -101,12 +128,12 @@ class GAT_FP(nn.Module):
             h = layer(g, h)
         
         h = torch.reshape(h, (len(h), -1))
-        h = torch.cat((h3,h), 1)
+        h = torch.cat((h,newFeature,h3), 1)
         h = self.linear(h)
         return h
 
 
-def train(trainLoader, testLoader, model, info):
+def train(trainLoader, testLoader, model, info, numLB):
     # define train/val samples, loss function and optimizer
     loss_fcn = nn.CrossEntropyLoss()
     
@@ -117,20 +144,22 @@ def train(trainLoader, testLoader, model, info):
         model.train()
         totalLoss = 0
         for batch in tqdm(trainLoader):
-            g, dataset_idx, labels = batch
+            g, labels = batch
             g = g.to(DEVICE)
             labels = g.ndata["label"]
             labels = labels.type(torch.LongTensor)
-            dataset_idx =  dataset_idx.to(DEVICE)
             labels = labels.to(DEVICE)
             optimizer.zero_grad()
             logits = model(g)
+            pos = torch.where(labels != numLB)
+            labels = labels[pos]
+            logits = logits[pos]
             loss = loss_fcn(logits, labels)
             totalLoss += loss.item()
             loss.backward()
             optimizer.step()
-        acc = evaluate(trainLoader, model)
-        acctest = evaluate(testLoader, model)
+        acc = evaluate(trainLoader, model, numLB)
+        acctest = evaluate(testLoader, model, numLB)
         print(
             "Epoch {:05d} | Loss {:.4f} | Accuracy_train {:.4f} | Accuracy_test {:.4f} ".format(
                 epoch, totalLoss, acc, acctest
@@ -151,10 +180,11 @@ if __name__ == "__main__":
     parser.add_argument('--wFP', action='store_true', default=False, help='edge direction type')
     parser.add_argument('--numFP', help='number of FP layer', default=5, type=int)
     parser.add_argument('--numTest', help='number of test', default=10, type=int)
-    parser.add_argument('--batchSize', help='size of batch', default=1, type=int)
+    parser.add_argument('--batchSize', help='size of batch', default=16, type=int)
     parser.add_argument('--log', action='store_true', default=True, help='save experiment info in output')
     parser.add_argument('--output', help='savedFile', default='./log.txt')
     parser.add_argument('--prePath', help='prepath to directory contain DGL files', default='.')
+    parser.add_argument('--numLabel', help='4label vs 6label', default='6')
     parser.add_argument( "--dataset",
         type=str,
         default="IEMOCAP",
@@ -171,6 +201,7 @@ if __name__ == "__main__":
             'seed': args.seed,
             'numTest': args.numTest,
             'wFP': args.wFP,
+            'numLabel': args.numLabel,
             'numFP': args.numFP
         }
     for test in range(args.numTest):
@@ -180,30 +211,45 @@ if __name__ == "__main__":
         else:
             setSeed = int(args.seed)
         seed_everything(seed=setSeed)
+        info['seed'] = setSeed
         if args.log:
             sourceFile = open(args.output, 'a')
             print('*'*10, 'INFO' ,'*'*10, file = sourceFile)
             print(info, file = sourceFile)
             sourceFile.close()
                  
-        dataPath  = './IEMOCAP_features/IEMOCAP_features.pkl'
-        data = emotionDataset(missing = args.missing, path = dataPath)
+        # dataPath  = './IEMOCAP_features/IEMOCAP_features.pkl'
+        # data = emotionDataset(missing = args.missing, path = dataPath)
+        # trainSet, testSet = data.trainSet, data.testSet
+        # trainLoader = GraphDataLoader( dataset=trainSet, batch_size=args.batchSize, shuffle=True)
+        # testLoader = GraphDataLoader( dataset=testSet, batch_size=args.batchSize)
+        numLB = 6
+        if args.numLabel =='4':
+            numLB = 4
+        dataPath  = f'./IEMOCAP/IEMOCAP_features_raw_{numLB}way.pkl'
+        data = Iemocap6_Gcnet_Dataset(missing = args.missing, path = dataPath, info = info)
         trainSet, testSet = data.trainSet, data.testSet
-        trainLoader = GraphDataLoader( dataset=trainSet, batch_size=args.batchSize, shuffle=True)
-        testLoader = GraphDataLoader( dataset=testSet, batch_size=args.batchSize)
+        g = torch.Generator()
+        g.manual_seed(setSeed)
 
+        trainLoader = GraphDataLoader(  dataset=trainSet, 
+                                        batch_size=args.batchSize, 
+                                        shuffle=True, 
+                                        generator=g)
+        testLoader = GraphDataLoader(   dataset=testSet, 
+                                        batch_size=args.batchSize,
+                                        generator=g)
 
         # create GCN model
-        in_size = data.in_size
         out_size = data.out_size 
-        model = GAT_FP(in_size, 128, out_size, args.wFP, args.numFP).to(DEVICE)    
+        model = GAT_FP(out_size, args.wFP, args.numFP).to(DEVICE)    
         print(model)
         # model training
         print("Training...")
-        highestAcc = train(trainLoader, testLoader, model, info)
+        highestAcc = train(trainLoader, testLoader, model, info, numLB)
         # test the model
         print("Testing...")
-        acc = evaluate(testLoader, model)
+        acc = evaluate(testLoader, model, numLB)
         print("Final Test accuracy {:.4f}".format(acc))
         if args.log:
             sourceFile = open(args.output, 'a')
