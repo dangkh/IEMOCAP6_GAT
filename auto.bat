@@ -1,7 +1,9 @@
-python main.py --E 150 --lr 0.003 --weight_decay 0.00001 --missing 0 --numTest 10 --wFP --output IEMOCAP6.txt
-python main.py --E 150 --lr 0.003 --weight_decay 0.00001 --missing 10 --numTest 10 --wFP --output IEMOCAP6.txt
-python main.py --E 150 --lr 0.003 --weight_decay 0.00001 --missing 20 --numTest 10 --wFP --output IEMOCAP6.txt
-python main.py --E 150 --lr 0.003 --weight_decay 0.00001 --missing 30 --numTest 10 --wFP --output IEMOCAP6.txt
-python main.py --E 150 --lr 0.003 --weight_decay 0.00001 --missing 40 --numTest 10 --wFP --output IEMOCAP6.txt
-python main.py --E 150 --lr 0.003 --weight_decay 0.00001 --missing 50 --numTest 10 --wFP --output IEMOCAP6.txt
-python main.py --E 150 --lr 0.003 --weight_decay 0.00001 --missing 60 --numTest 10 --wFP --output IEMOCAP6.txt
+python main.py --E 200 --lr 0.003 --weight_decay 0.00001 --missing 60 --numTest 10 --wFP --output log1.txt --rho 0.05
+python main.py --E 200 --lr 0.003 --weight_decay 0.00001 --missing 60 --numTest 10 --wFP --output log1.txt --rho 0.10
+python main.py --E 200 --lr 0.003 --weight_decay 0.00001 --missing 60 --numTest 10 --wFP --output log1.txt --rho 0.15
+python main.py --E 200 --lr 0.003 --weight_decay 0.00001 --missing 60 --numTest 10 --wFP --output log1.txt --rho 0.20
+python main.py --E 200 --lr 0.003 --weight_decay 0.00001 --missing 60 --numTest 10 --wFP --output log1.txt --rho 0.30
+python main.py --E 200 --lr 0.003 --weight_decay 0.00001 --missing 60 --numTest 10 --wFP --output log1.txt --rho 0.35
+python main.py --E 200 --lr 0.003 --weight_decay 0.00001 --missing 60 --numTest 10 --wFP --output log1.txt --rho 0.40
+python main.py --E 200 --lr 0.003 --weight_decay 0.00001 --missing 60 --numTest 10 --wFP --output log1.txt --rho 0.45
+python main.py --E 200 --lr 0.003 --weight_decay 0.00001 --missing 60 --numTest 10 --wFP --output log1.txt --rho 0.50
