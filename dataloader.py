@@ -151,15 +151,18 @@ class IEMOCAP6DGL_GCNET(DGLDataset):
         text = np.vstack(textf)
         audio = np.vstack(audiof)
         vision = np.vstack(visionf)
+        meanText = np.mean(text)
+        meanAudio = np.mean(audio)
+        meanVision = np.mean(vision)
         numNode = len(text)
         missingMask = self.listMask[index]
         for ii in range(numNode):
             if missingMask[0][ii] == 1:
-                text[ii] = 0
+                text[ii] = meanText
             if missingMask[1][ii] == 1:
-                audio[ii] = 0
+                audio[ii] = meanAudio
             if missingMask[2][ii] == 1:
-                vision[ii] = 0
+                vision[ii] = meanVision
 
         labels = np.asarray(self.videoLabels[name])
         src = []

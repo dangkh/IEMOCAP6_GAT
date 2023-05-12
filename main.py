@@ -23,8 +23,6 @@ from attentionModule import *
 from dgl.nn import GraphConv, SumPooling, AvgPooling
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
-
 def checkMissing(data):
     if len(np.where(data==0)[0]) > 0:
         return True
@@ -114,10 +112,10 @@ class GAT_FP(nn.Module):
         # stackFT = torch.hstack([text, audio, video]).float()  
         # stackFT = stackFT.view(-1, 100, self.in_size).to(torch.float64)
         h = stackFT.float()
-        h1 = self.GATFP(g, h)
-        h = 0.5 * (h + h1)
-        # h = h + h1
-        h = F.normalize(h, p=1)
+        # h1 = self.GATFP(g, h)
+        # h = 0.5 * (h + h1)
+        # # h = h + h1
+        # h = F.normalize(h, p=1)
         h = self.maskFilter(h)
         h3 = self.gat2(g, h)
         for i, layer in enumerate(self.gat1):
@@ -180,7 +178,7 @@ if __name__ == "__main__":
     parser.add_argument('--wFP', action='store_true', default=False, help='edge direction type')
     parser.add_argument('--numFP', help='number of FP layer', default=5, type=int)
     parser.add_argument('--numTest', help='number of test', default=10, type=int)
-    parser.add_argument('--batchSize', help='size of batch', default=16, type=int)
+    parser.add_argument('--batchSize', help='size of batch', default=64, type=int)
     parser.add_argument('--log', action='store_true', default=True, help='save experiment info in output')
     parser.add_argument('--output', help='savedFile', default='./log.txt')
     parser.add_argument('--prePath', help='prepath to directory contain DGL files', default='.')
