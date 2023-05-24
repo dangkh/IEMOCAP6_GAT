@@ -82,7 +82,7 @@ class GAT_FP(nn.Module):
             )
         coef = 1
         self.gat2 = MultiHeadGATCrossModal(self.in_size,  gcv[-1], num_heads = self.num_heads)
-        self.linear = nn.Linear(136, out_size).to(torch.float64)
+        self.linear = nn.Linear(192, out_size).to(torch.float64)
         # self.linear = nn.Linear(gcv[-1] * self.num_heads * 7, out_size)
         self.dropout = nn.Dropout(0.5)
 
@@ -112,21 +112,22 @@ class GAT_FP(nn.Module):
         # stackFT = torch.hstack([text, audio, video]).float()  
         # stackFT = stackFT.view(-1, 100, self.in_size).to(torch.float64)
         h = stackFT.float()
-        # h1 = self.GATFP(g, h)
-        # h = 0.5 * (h + h1)
-        # # h = h + h1
-        # h = F.normalize(h, p=1)
-        h = self.maskFilter(h)
-        h3 = self.gat2(g, h)
-        for i, layer in enumerate(self.gat1):
-            if i != 0:
-                h = self.dropout(h)
-            h = h.float()
-            h = torch.reshape(h, (len(h), -1))
-            h = layer(g, h)
+        h1 = self.GATFP(g, h)
+        h = 0.5 * (h + h1)
+        # h = h + h1
+        h = F.normalize(h, p=1)
+        h = h.to(torch.float64)
+        # h = self.maskFilter(h)
+        # h3 = self.gat2(g, h)
+        # for i, layer in enumerate(self.gat1):
+        #     if i != 0:
+        #         h = self.dropout(h)
+        #     h = h.float()
+        #     h = torch.reshape(h, (len(h), -1))
+        #     h = layer(g, h)
         
         h = torch.reshape(h, (len(h), -1))
-        h = torch.cat((h,newFeature,h3), 1)
+        # h = torch.cat((h,newFeature,h3), 1)
         h = self.linear(h)
         return h
 
