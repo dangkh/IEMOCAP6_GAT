@@ -83,6 +83,7 @@ class GAT_FP(nn.Module):
                 dglnn.GATv2Conv(np.power(self.num_heads, ii) * gcv[ii],  gcv[ii+1], activation=F.relu,  residual=True, num_heads = self.num_heads)
             )
         coef = 1
+        self.reconstruct = dglnn.GATv2Conv(np.power(self.num_heads, 1) * gcv[1],  self.in_size, activation=F.relu,  residual=True, num_heads = 1)
         self.gat2 = MultiHeadGATCrossModal(self.in_size,  gcv[-1], num_heads = self.num_heads)
         self.linear = nn.Linear(136, out_size).to(torch.float64)
         # self.linear = nn.Linear(gcv[-1] * self.num_heads * 7, out_size)
@@ -166,10 +167,7 @@ def train(trainLoader, testLoader, model, info, numLB):
             pos = torch.where(labels != numLB)
             labels = labels[pos]
             logits = logits[pos]
-            if int(info['rho']) != -1:
-                loss = np.power((100 - info['missing']) * 0.01,2) * loss_fcn(logits, labels) + np.power((info['missing']) * 0.01,2) * model.rho_loss(float(info['rho']))
-            else:
-                loss = loss_fcn(logits, labels)
+            loss = np.power((100 - info['missing']) * 0.01,2) * loss_fcn(logits, labels)
             totalLoss += loss.item()
             loss.backward()
             optimizer.step()
@@ -216,8 +214,7 @@ if __name__ == "__main__":
             'seed': args.seed,
             'numTest': args.numTest,
             'wFP': args.wFP,
-            'numLabel': args.numLabel,
-            'rho': args.rho
+            'numLabel': args.numLabel
         }
     for test in range(args.numTest):
         if args.seed == 'random':
