@@ -166,7 +166,10 @@ def train(trainLoader, testLoader, model, info, numLB):
             pos = torch.where(labels != numLB)
             labels = labels[pos]
             logits = logits[pos]
-            loss = loss_fcn(logits, labels) + model.rho_loss(float(info['rho']))
+            if int(info['rho']) != -1:
+                loss = np.power((100 - info['missing']) * 0.01,2) * loss_fcn(logits, labels) + np.power((info['missing']) * 0.01,2) * model.rho_loss(float(info['rho']))
+            else:
+                loss = loss_fcn(logits, labels)
             totalLoss += loss.item()
             loss.backward()
             optimizer.step()
@@ -186,7 +189,7 @@ if __name__ == "__main__":
     parser.add_argument('--E', help='number of epochs', default=50, type=int)
     parser.add_argument('--seed', help='type of seed: random vs fix', default='random')
     parser.add_argument('--lr', help='learning rate', default=0.003, type=float)
-    parser.add_argument('--rho', help='probality default', default=0.25, type=float)
+    parser.add_argument('--rho', help='probality default', default=-1.0, type=float)
     parser.add_argument('--weight_decay', help='weight decay', default=0.00001, type=float)
     parser.add_argument('--edgeType', help='type of edge:0 for similarity and 1 for other', default=0, type=int)
     parser.add_argument('--missing', help='percentage of missing utterance in MM data', default=0, type=int)
