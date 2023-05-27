@@ -1,6 +1,7 @@
 import argparse
 import torch
 import torch.nn as nn
+from torch.nn import init
 import torch.nn.functional as F
 
 import dgl
@@ -11,7 +12,7 @@ from dgl.data import CiteseerGraphDataset, CoraGraphDataset, PubmedGraphDataset
 from dataloader import *
 from sklearn.metrics import f1_score
 from torch.utils.data import DataLoader
-# torch.set_default_dtype(torch.float)
+torch.set_default_dtype(torch.double)
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 import matplotlib as mpl
@@ -44,12 +45,13 @@ class maskFilter(nn.Module):
         videoMask[aa:] = 1.0
         self.textMask = torch.from_numpy(textMask) * torch.tensor(3.0)
         self.textMask = nn.Parameter(self.textMask).float().to(DEVICE)
+        self.textMask = nn.Parameter(self.textMask).double().to(DEVICE)
         
         self.audioMask = torch.from_numpy(audioMask) * torch.tensor(2.0)
-        self.audioMask = nn.Parameter(self.audioMask).float().to(DEVICE)
+        self.audioMask = nn.Parameter(self.audioMask).double().to(DEVICE)
         
         self.videoMask = torch.from_numpy(videoMask) * torch.tensor(1.0)
-        self.videoMask = nn.Parameter(self.videoMask).float().to(DEVICE)
+        self.videoMask = nn.Parameter(self.videoMask).double().to(DEVICE)
 
 
     def forward(self, features):
@@ -82,10 +84,10 @@ class maskFilter_2modals(nn.Module):
         f2Mask = np.copy(currentFeatures)
         f2Mask[f1: f1+f2] = 1.0
         self.f1Mask = torch.from_numpy(f1Mask) * torch.tensor(2.0)
-        self.f1Mask = nn.Parameter(self.f1Mask).float().to(DEVICE)
+        self.f1Mask = nn.Parameter(self.f1Mask).double().to(DEVICE)
         
         self.f2Mask = torch.from_numpy(f2Mask) * torch.tensor(2.0)
-        self.f2Mask = nn.Parameter(self.f2Mask).float().to(DEVICE)
+        self.f2Mask = nn.Parameter(self.f2Mask).double().to(DEVICE)
         
     def forward(self, features):
         return features * self.f1Mask + features * self.f2Mask
@@ -106,7 +108,7 @@ class GAT_FP(nn.Module):
         else:
             self.maskFilter = maskFilter_2modals(in_size)
         self.num_heads = 4
-        self.GATFP = dglnn.GraphConv(in_size,  in_size, norm = 'both', weight=False)
+        self.GATFP = dglnn.GraphConv(in_size,  in_size, norm = 'both')
         self.gat1 = nn.ModuleList()
         # two-layer GCN
         for ii in range(len(gcv)-1):
@@ -122,20 +124,20 @@ class GAT_FP(nn.Module):
         self.linear = nn.Linear(gcv[-1] * self.num_heads * 2, out_size)
         # self.linear = nn.Linear(gcv[-1] * self.num_heads * 7, out_size)
         self.dropout = nn.Dropout(0.5)
+        self.reset_parameters()
 
     def forward(self, g):
         features = g.ndata["x"]
-        h = features.float()
+        h = features.double()
         h1 = self.GATFP(g, h)
         h = 0.5 * (h + h1)
-        # h = h + h1
         h = F.normalize(h, p=1)
         h = self.maskFilter(h)
         h3 = self.gat2(g, h)
         for i, layer in enumerate(self.gat1):
             if i != 0:
                 h = self.dropout(h)
-            h = h.float()
+            h = h.double()
             h = torch.reshape(h, (len(h), -1))
             h = layer(g, h)
         
@@ -144,6 +146,12 @@ class GAT_FP(nn.Module):
         h = self.linear(h)
         return h
 
+    def reset_parameters(self):
+        self.GATFP.reset_parameters()
+        for i, layer in enumerate(self.gat1):
+            layer.reset_parameters()
+        init.xavier_uniform_(self.linear.weight, gain=1)
+        nn.init.constant_(self.linear.bias, 0)
 
 def train(trainLoader, testLoader, model, info):
     # define train/val samples, loss function and optimizer
@@ -230,22 +238,25 @@ if __name__ == "__main__":
             setSeed = int(args.seed)
         seed_everything(seed=setSeed)
         if args.log:
-            sourceFile = open(args.output, 'a')
+            sourceFile = open('db.txt', 'a')
             print('*'*10, 'INFO' ,'*'*10, file = sourceFile)
             print(info, file = sourceFile)
-            sourceFile.close()
                  
         dataPath  = './IEMOCAP_features/IEMOCAP_features.pkl'
         data = emotionDataset(missing = args.missing, path = dataPath, modals = args.modals)
         trainSet, testSet = data.trainSet, data.testSet
-        trainLoader = GraphDataLoader( dataset=trainSet, batch_size=args.batchSize, shuffle=True)
+        trainLoader = GraphDataLoader( dataset=trainSet, batch_size=args.batchSize)
         testLoader = GraphDataLoader( dataset=testSet, batch_size=args.batchSize)
 
 
         # create GCN model
         in_size = data.in_size
         out_size = data.out_size 
-        model = GAT_FP(in_size, 128, out_size, args.wFP, args.numFP, args.modals).to(DEVICE)    
+        model = GAT_FP(in_size, 128, out_size, args.wFP, args.numFP, args.modals)
+        for layer in model.children():
+           if hasattr(layer, 'reset_parameters'):
+               layer.reset_parameters()
+        model.to(DEVICE)
         print(model)
         # model training
         print("Training...")
@@ -255,7 +266,6 @@ if __name__ == "__main__":
         acc = evaluate(testLoader, model)
         print("Final Test accuracy {:.4f}".format(acc))
         if args.log:
-            sourceFile = open(args.output, 'a')
             print(f'Highest Acc: {highestAcc}, final Acc {acc}', file = sourceFile)
             print('*'*10, 'End' ,'*'*10, file = sourceFile)
             sourceFile.close()
