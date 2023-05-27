@@ -44,7 +44,6 @@ class maskFilter(nn.Module):
         videoMask = np.copy(currentFeatures)
         videoMask[aa:] = 1.0
         self.textMask = torch.from_numpy(textMask) * torch.tensor(3.0)
-        self.textMask = nn.Parameter(self.textMask).float().to(DEVICE)
         self.textMask = nn.Parameter(self.textMask).double().to(DEVICE)
         
         self.audioMask = torch.from_numpy(audioMask) * torch.tensor(2.0)
