@@ -2,7 +2,7 @@ import argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from torch.nn import init
 import dgl
 import dgl.nn as dglnn
 from dgl import AddSelfLoop
@@ -11,7 +11,6 @@ from dgl.data import CiteseerGraphDataset, CoraGraphDataset, PubmedGraphDataset
 from dataloader import *
 from sklearn.metrics import f1_score
 from torch.utils.data import DataLoader
-# torch.set_default_dtype(torch.float)
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 import matplotlib as mpl
@@ -22,6 +21,7 @@ from tqdm import tqdm
 from attentionModule import *
 from dgl.nn import GraphConv, SumPooling, AvgPooling
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.set_default_dtype(torch.double)
 
 
 
@@ -43,13 +43,13 @@ class maskFilter(nn.Module):
         videoMask = np.copy(currentFeatures)
         videoMask[aa:] = 1.0
         self.textMask = torch.from_numpy(textMask) * torch.tensor(3.0)
-        self.textMask = nn.Parameter(self.textMask).float().to(DEVICE)
+        self.textMask = nn.Parameter(self.textMask).double().to(DEVICE)
         
         self.audioMask = torch.from_numpy(audioMask) * torch.tensor(2.0)
-        self.audioMask = nn.Parameter(self.audioMask).float().to(DEVICE)
+        self.audioMask = nn.Parameter(self.audioMask).double().to(DEVICE)
         
         self.videoMask = torch.from_numpy(videoMask) * torch.tensor(1.0)
-        self.videoMask = nn.Parameter(self.videoMask).float().to(DEVICE)
+        self.videoMask = nn.Parameter(self.videoMask).double().to(DEVICE)
 
 
     def forward(self, features):
@@ -64,18 +64,18 @@ class maskFilter(nn.Module):
 class GAT_FP(nn.Module):
     def __init__(self, out_size, wFP, probality = False):
         super().__init__()
-        self.audioEncoder = nn.Linear(512, 64).to(torch.float64)
+        self.audioEncoder = nn.Linear(512, 64).to(torch.double)
         self.dropAudio = nn.Dropout(0.5)
-        self.visionEncoder = nn.Linear(1024, 64).to(torch.float64)
+        self.visionEncoder = nn.Linear(1024, 64).to(torch.double)
         self.dropVision = nn.Dropout(0.5)
-        self.textEncoder = nn.Linear(1024, 64).to(torch.float64)
+        self.textEncoder = nn.Linear(1024, 64).to(torch.double)
         self.in_size = 192
         self.outMMEncoder = 4
-        self.MMEncoder = nn.LSTM(self.in_size, self.outMMEncoder, bidirectional = True).to(torch.float64)
+        self.MMEncoder = nn.LSTM(self.in_size, self.outMMEncoder, bidirectional = True).to(torch.double)
         gcv = [self.in_size, 32, 4]
         self.maskFilter = maskFilter(self.in_size)
         self.num_heads = 16
-        self.imputationModule = dglnn.GraphConv(self.in_size,  self.in_size, norm = 'both', weight=True)
+        self.imputationModule = dglnn.GraphConv(self.in_size,  self.in_size, norm = 'none').to(torch.double)
         self.gat1 = nn.ModuleList()
         # two-layer GCN
         for ii in range(len(gcv)-1):
@@ -84,17 +84,18 @@ class GAT_FP(nn.Module):
             )
         coef = 1
         self.gat2 = MultiHeadGATCrossModal(self.in_size,  gcv[-1], num_heads = self.num_heads)
-        self.linear = nn.Linear(136, out_size).to(torch.float64)
+        self.linear = nn.Linear(136, out_size).to(torch.double)
         # self.linear = nn.Linear(gcv[-1] * self.num_heads * 7, out_size)
         self.dropout = nn.Dropout(0.5)
         self.probality = probality
+        self.reset_parameters()
 
     def forward(self, g):
-        text = g.ndata["text"].to(torch.float64)
+        text = g.ndata["text"].to(torch.double)
         audio = g.ndata["audio"]
-        audio = audio.to(torch.float64)
+        audio = audio.to(torch.double)
         video = g.ndata["vision"]
-        video = video.to(torch.float64)
+        video = video.to(torch.double)
         # text =norm(text)
         # audio =norm(audio)
         # video =norm(video)
@@ -105,8 +106,8 @@ class GAT_FP(nn.Module):
         
         visionOutput = self.dropVision(visionOutput)
         textOutput = self.textEncoder(text)
-        stackFT = torch.hstack([textOutput, audioOuput, visionOutput]).to(torch.float64)
-        newFeature = stackFT.view(-1, 120, self.in_size).to(torch.float64)
+        stackFT = torch.hstack([textOutput, audioOuput, visionOutput]).to(torch.double)
+        newFeature = stackFT.view(-1, 120, self.in_size).to(torch.double)
         newFeature = newFeature.permute(1, 0, 2)
         newFeature, _ = self.MMEncoder(newFeature)
         newFeature = newFeature.permute(1, 0, 2)
@@ -114,17 +115,16 @@ class GAT_FP(nn.Module):
 
         # stackFT = torch.hstack([text, audio, video]).float()  
         # stackFT = stackFT.view(-1, 100, self.in_size).to(torch.float64)
-        h = stackFT.float()
+        h = stackFT.double()
         h1 = self.imputationModule(g, h)
         h = 0.5 * (h + h1)
-        # h = h + h1
         h = F.normalize(h, p=1)
-        # h = self.maskFilter(h)
+        h = self.maskFilter(h)
         h3 = self.gat2(g, h)
         for i, layer in enumerate(self.gat1):
             if i != 0:
                 h = self.dropout(h)
-            h = h.float()
+            h = h.double()
             h = torch.reshape(h, (len(h), -1))
             h = layer(g, h)
             if i == 0 and self.probality:
@@ -135,6 +135,20 @@ class GAT_FP(nn.Module):
         h = torch.cat((h,newFeature,h3), 1)
         h = self.linear(h)
         return h
+
+    def reset_parameters(self):
+        self.imputationModule.reset_parameters()
+        for i, layer in enumerate(self.gat1):
+            layer.reset_parameters()
+        init.xavier_uniform_(self.linear.weight, gain=1)
+        nn.init.constant_(self.linear.bias, 0)
+        init.xavier_uniform_(self.audioEncoder.weight, gain=1)
+        nn.init.constant_(self.audioEncoder.bias, 0)
+        init.xavier_uniform_(self.visionEncoder.weight, gain=1)
+        nn.init.constant_(self.visionEncoder.bias, 0)
+        self.textEncoder.reset_parameters()
+        self.MMEncoder.reset_parameters()
+        
 
     def rho_loss(self, rho, size_average=True):        
         dkl = - rho * torch.log(self.data_rho) - (1-rho)*torch.log(1-self.data_rho) # calculates KL divergence
@@ -149,7 +163,7 @@ def train(trainLoader, testLoader, model, info, numLB):
     # define train/val samples, loss function and optimizer
     loss_fcn = nn.CrossEntropyLoss()
     
-    optimizer = torch.optim.Adam(model.parameters(), lr=info['lr'], weight_decay=info['weight_decay'])
+    optimizer = torch.optim.Adam(model.parameters(), lr=info['lr'], weight_decay=info['weight_decay'], eps=1e-12)
     highestAcc = 0
     # training loop
     for epoch in range(info['numEpoch']):
@@ -173,7 +187,8 @@ def train(trainLoader, testLoader, model, info, numLB):
             totalLoss += loss.item()
             loss.backward()
             optimizer.step()
-        acc = evaluate(trainLoader, model, numLB)
+        # acc = evaluate(trainLoader, model, numLB)
+        acc = -1
         acctest = evaluate(testLoader, model, numLB)
         print(
             "Epoch {:05d} | Loss {:.4f} | Accuracy_train {:.4f} | Accuracy_test {:.4f} ".format(
@@ -207,7 +222,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     print(f"Training with DGL built-in GraphConv module.")
-    torch.cuda.empty_cache()
     info = {
             'numEpoch': args.E,
             'lr': args.lr, 
@@ -225,6 +239,7 @@ if __name__ == "__main__":
             info['seed'] = setSeed
         else:
             setSeed = int(args.seed)
+        torch.cuda.empty_cache()
         seed_everything(seed=setSeed)
         info['seed'] = setSeed
         if args.log:
@@ -245,11 +260,10 @@ if __name__ == "__main__":
         data = Iemocap6_Gcnet_Dataset(missing = args.missing, path = dataPath, info = info)
         trainSet, testSet = data.trainSet, data.testSet
         g = torch.Generator()
-        g.manual_seed(setSeed)
+        # g.manual_seed(setSeed)
 
         trainLoader = GraphDataLoader(  dataset=trainSet, 
                                         batch_size=args.batchSize, 
-                                        shuffle=True, 
                                         generator=g)
         testLoader = GraphDataLoader(   dataset=testSet, 
                                         batch_size=args.batchSize,
@@ -257,7 +271,11 @@ if __name__ == "__main__":
 
         # create GCN model
         out_size = data.out_size 
-        model = GAT_FP(out_size, args.wFP, probality = True).to(DEVICE)    
+        model = GAT_FP(out_size, args.wFP, probality = True)
+        for layer in model.children():
+           if hasattr(layer, 'reset_parameters'):
+               layer.reset_parameters()
+        model.to(DEVICE)
         print(model)
         # model training
         print("Training...")

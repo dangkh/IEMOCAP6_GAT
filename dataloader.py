@@ -192,10 +192,10 @@ class IEMOCAP6DGL_GCNET(DGLDataset):
 
 
         g = dgl.graph((src, dst))
-        g.ndata["text"] = text.to(torch.float64)
-        g.ndata["audio"] = audio.to(torch.float64)
-        g.ndata["vision"] = vision.to(torch.float64)
-        g.ndata["label"] = labels.to(torch.float64)
+        g.ndata["text"] = text.to(torch.double)
+        g.ndata["audio"] = audio.to(torch.double)
+        g.ndata["vision"] = vision.to(torch.double)
+        g.ndata["label"] = labels.to(torch.double)
         return g, labels
 
     def __len__(self):

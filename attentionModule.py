@@ -111,6 +111,8 @@ class GATInnerLayer_v2(nn.Module):
         nn.init.xavier_normal_(self.qMaskV.weight, gain=gain)
         nn.init.xavier_normal_(self.kMaskV.weight, gain=gain)
         nn.init.xavier_normal_(self.vMaskV.weight, gain=gain)
+        nn.init.xavier_normal_(self.ln.weight, gain=gain)
+        nn.init.constant_(self.ln.bias, 0)
 
     def unitAtt(self, q, k, v, feature):
         qVal = q(feature)
@@ -192,6 +194,8 @@ class crossModal(nn.Module):
         nn.init.xavier_normal_(self.qMaskV.weight, gain=gain)
         nn.init.xavier_normal_(self.kMaskV.weight, gain=gain)
         nn.init.xavier_normal_(self.vMaskV.weight, gain=gain)
+        nn.init.xavier_normal_(self.ln.weight, gain=gain)
+        nn.init.constant_(self.ln.bias, 0)
 
     def unitAtt(self, q, k, v, feature, referFt):
         qVal = q(feature)
