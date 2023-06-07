@@ -12,7 +12,6 @@ from matplotlib.colors import ListedColormap
 from tqdm import tqdm
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 seedList = [1001, 9138, 86503, 37949, 22627, 75258, 94877, 9829, 47702, 15908]
-seedList = [1001] * 10
 import os
 import dgl
 

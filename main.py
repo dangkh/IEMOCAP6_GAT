@@ -91,11 +91,11 @@ class GAT_FP(nn.Module):
         self.reset_parameters()
 
     def forward(self, g):
-        text = g.ndata["text"].to(torch.double)
+        text = g.ndata["text"].double()
         audio = g.ndata["audio"]
-        audio = audio.to(torch.double)
+        audio = audio.double()
         video = g.ndata["vision"]
-        video = video.to(torch.double)
+        video = video.double()
         # text =norm(text)
         # audio =norm(audio)
         # video =norm(video)
@@ -103,11 +103,11 @@ class GAT_FP(nn.Module):
         audioOuput = self.dropAudio(audioOuput)
         
         visionOutput = self.visionEncoder(video)
-        
         visionOutput = self.dropVision(visionOutput)
+
         textOutput = self.textEncoder(text)
         stackFT = torch.hstack([textOutput, audioOuput, visionOutput]).to(torch.double)
-        newFeature = stackFT.view(-1, 120, self.in_size).to(torch.double)
+        newFeature = stackFT.reshape(-1, 120, self.in_size).to(torch.double)
         newFeature = newFeature.permute(1, 0, 2)
         newFeature, _ = self.MMEncoder(newFeature)
         newFeature = newFeature.permute(1, 0, 2)
@@ -181,7 +181,7 @@ def train(trainLoader, testLoader, model, info, numLB):
             labels = labels[pos]
             logits = logits[pos]
             if int(info['rho']) != -1:
-                loss = np.power((100 - info['missing']) * 0.01,2) * loss_fcn(logits, labels) + np.power((info['missing']) * 0.01,2) * model.rho_loss(float(info['rho']))
+                loss = (100 - info['missing']) * 0.01 * loss_fcn(logits, labels) + (info['missing']) * 0.01 * model.rho_loss(float(info['rho']))
             else:
                 loss = loss_fcn(logits, labels)
             totalLoss += loss.item()
@@ -239,7 +239,6 @@ if __name__ == "__main__":
             info['seed'] = setSeed
         else:
             setSeed = int(args.seed)
-        torch.cuda.empty_cache()
         seed_everything(seed=setSeed)
         info['seed'] = setSeed
         if args.log:
@@ -259,15 +258,11 @@ if __name__ == "__main__":
         dataPath  = f'./IEMOCAP/IEMOCAP_features_raw_{numLB}way.pkl'
         data = Iemocap6_Gcnet_Dataset(missing = args.missing, path = dataPath, info = info)
         trainSet, testSet = data.trainSet, data.testSet
-        g = torch.Generator()
-        # g.manual_seed(setSeed)
 
         trainLoader = GraphDataLoader(  dataset=trainSet, 
-                                        batch_size=args.batchSize, 
-                                        generator=g)
+                                        batch_size=args.batchSize)
         testLoader = GraphDataLoader(   dataset=testSet, 
-                                        batch_size=args.batchSize,
-                                        generator=g)
+                                        batch_size=args.batchSize)
 
         # create GCN model
         out_size = data.out_size 

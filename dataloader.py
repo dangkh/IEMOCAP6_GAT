@@ -195,7 +195,7 @@ class IEMOCAP6DGL_GCNET(DGLDataset):
         g.ndata["text"] = text.to(torch.double)
         g.ndata["audio"] = audio.to(torch.double)
         g.ndata["vision"] = vision.to(torch.double)
-        g.ndata["label"] = labels.to(torch.double)
+        g.ndata["label"] = labels
         return g, labels
 
     def __len__(self):
