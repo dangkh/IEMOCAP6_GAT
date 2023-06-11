@@ -22,7 +22,7 @@ from tqdm import tqdm
 from attentionModule import *
 from dgl.nn import GraphConv, SumPooling, AvgPooling
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+from torch.nn import init
 
 
 def checkMissing(data):
@@ -62,7 +62,7 @@ class maskFilter(nn.Module):
         return f'y = {self.textMask.item()} + {self.audioMask.item()} + {self.videoMask.item()}'
 
 class GAT_FP(nn.Module):
-    def __init__(self, out_size, wFP, numFP):
+    def __init__(self, out_size, wFP, probality = False):
         super().__init__()
         self.audioEncoder = nn.Linear(512, 64).to(torch.float64)
         self.dropAudio = nn.Dropout(0.5)
@@ -75,7 +75,7 @@ class GAT_FP(nn.Module):
         gcv = [self.in_size, 32, 4]
         self.maskFilter = maskFilter(self.in_size)
         self.num_heads = 16
-        self.GATFP = dglnn.GraphConv(self.in_size,  self.in_size, norm = 'both', weight=False)
+        self.imputationModule = dglnn.GraphConv(self.in_size,  self.in_size, norm = 'both')
         self.gat1 = nn.ModuleList()
         # two-layer GCN
         for ii in range(len(gcv)-1):
@@ -86,7 +86,9 @@ class GAT_FP(nn.Module):
         self.gat2 = MultiHeadGATCrossModal(self.in_size,  gcv[-1], num_heads = self.num_heads)
         self.linear = nn.Linear(136, out_size).to(torch.float64)
         # self.linear = nn.Linear(gcv[-1] * self.num_heads * 7, out_size)
-        self.dropout = nn.Dropout(0.5)
+        self.dropout = nn.Dropout(0.75)
+        self.probality = probality
+        # self.reset_parameters()
 
     def forward(self, g):
         text = g.ndata["text"].to(torch.float64)
@@ -114,7 +116,7 @@ class GAT_FP(nn.Module):
         # stackFT = torch.hstack([text, audio, video]).float()  
         # stackFT = stackFT.view(-1, 100, self.in_size).to(torch.float64)
         h = stackFT.float()
-        h1 = self.GATFP(g, h)
+        h1 = self.imputationModule(g, h)
         h = 0.5 * (h + h1)
         # h = h + h1
         h = F.normalize(h, p=1)
@@ -126,11 +128,36 @@ class GAT_FP(nn.Module):
             h = h.float()
             h = torch.reshape(h, (len(h), -1))
             h = layer(g, h)
+            if i == 0 and self.probality:
+                self.firstGCN = torch.sigmoid(h)
+                self.data_rho = torch.mean(self.firstGCN.reshape(-1, 16*32), 0)
         
         h = torch.reshape(h, (len(h), -1))
         h = torch.cat((h,newFeature,h3), 1)
         h = self.linear(h)
         return h
+
+    def reset_parameters(self):
+        self.imputationModule.reset_parameters()
+        for i, layer in enumerate(self.gat1):
+            layer.reset_parameters()
+        init.xavier_uniform_(self.linear.weight, gain=1)
+        nn.init.constant_(self.linear.bias, 0)
+        init.xavier_uniform_(self.audioEncoder.weight, gain=1)
+        nn.init.constant_(self.audioEncoder.bias, 0)
+        init.xavier_uniform_(self.visionEncoder.weight, gain=1)
+        nn.init.constant_(self.visionEncoder.bias, 0)
+        self.textEncoder.reset_parameters()
+        self.MMEncoder.reset_parameters()
+
+
+    def rho_loss(self, rho, size_average=True):
+        dkl = - rho * torch.log(self.data_rho) - (1-rho)*torch.log(1-self.data_rho) # calculates KL divergence
+        if size_average:
+            self._rho_loss = dkl.mean()
+        else:
+            self._rho_loss = dkl.sum()
+        return self._rho_loss
 
 
 def train(trainLoader, testLoader, model, info, numLB):
@@ -154,11 +181,19 @@ def train(trainLoader, testLoader, model, info, numLB):
             pos = torch.where(labels != numLB)
             labels = labels[pos]
             logits = logits[pos]
-            loss = loss_fcn(logits, labels)
+            # loss = loss_fcn(logits, labels)
+            
+            if int(info['rho']) != -1:
+                loss = loss_fcn(logits, labels) + (info['missing']) * 0.01 * model.rho_loss(float(info['rho']))
+                # loss = (100 - info['missing']) * 0.01 * loss_fcn(logits, labels) + (info['missing']) * 0.01 * model.rho_loss(float(info['rho']))
+            else:
+                loss = loss_fcn(logits, labels)
+
             totalLoss += loss.item()
             loss.backward()
             optimizer.step()
-        acc = evaluate(trainLoader, model, numLB)
+        # acc = evaluate(trainLoader, model, numLB)
+        acc  = -1
         acctest = evaluate(testLoader, model, numLB)
         print(
             "Epoch {:05d} | Loss {:.4f} | Accuracy_train {:.4f} | Accuracy_test {:.4f} ".format(
@@ -174,11 +209,11 @@ if __name__ == "__main__":
     parser.add_argument('--E', help='number of epochs', default=50, type=int)
     parser.add_argument('--seed', help='type of seed: random vs fix', default='random')
     parser.add_argument('--lr', help='learning rate', default=0.003, type=float)
+    parser.add_argument('--rho', help='probality default', default=-1.0, type=float)
     parser.add_argument('--weight_decay', help='weight decay', default=0.00001, type=float)
     parser.add_argument('--edgeType', help='type of edge:0 for similarity and 1 for other', default=0, type=int)
     parser.add_argument('--missing', help='percentage of missing utterance in MM data', default=0, type=int)
     parser.add_argument('--wFP', action='store_true', default=False, help='edge direction type')
-    parser.add_argument('--numFP', help='number of FP layer', default=5, type=int)
     parser.add_argument('--numTest', help='number of test', default=10, type=int)
     parser.add_argument('--batchSize', help='size of batch', default=16, type=int)
     parser.add_argument('--log', action='store_true', default=True, help='save experiment info in output')
@@ -202,7 +237,7 @@ if __name__ == "__main__":
             'numTest': args.numTest,
             'wFP': args.wFP,
             'numLabel': args.numLabel,
-            'numFP': args.numFP
+            'rho': args.rho
         }
     for test in range(args.numTest):
         if args.seed == 'random':
@@ -242,7 +277,11 @@ if __name__ == "__main__":
 
         # create GCN model
         out_size = data.out_size 
-        model = GAT_FP(out_size, args.wFP, args.numFP).to(DEVICE)    
+        model = GAT_FP(out_size, args.wFP, probality = True)
+        for layer in model.children():
+           if hasattr(layer, 'reset_parameters'):
+               layer.reset_parameters()
+        model.to(DEVICE)
         print(model)
         # model training
         print("Training...")

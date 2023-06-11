@@ -36,7 +36,7 @@ def genMissMultiModal(matSize, percent):
     if matSize[-1] <= 10:
         errPecent = 5
     if matSize[-1] <= 3:
-        errPecent = 20
+        errPecent = 5
     listMask = []
     masks = [np.asarray([[0, 0, 0]]), np.asarray([[0, 0, 1], [0, 1, 0], [1, 0, 0]]), np.asarray([[0, 1, 1], [1, 1, 0], [1, 0, 1]])]
     if percent > 60:
