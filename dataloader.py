@@ -151,6 +151,11 @@ class IEMOCAP6DGL_GCNET(DGLDataset):
         text = np.vstack(textf)
         audio = np.vstack(audiof)
         vision = np.vstack(visionf)
+
+        oText = np.copy(text)
+        oAudio = np.copy(audio)
+        oVision = np.copy(vision)
+
         numNode = len(text)
         missingMask = self.listMask[index]
         for ii in range(numNode):
@@ -185,17 +190,24 @@ class IEMOCAP6DGL_GCNET(DGLDataset):
         text = compensation(text, outSize)
         audio = compensation(audio, outSize)
         vision = compensation(vision, outSize)
+
+        oText = compensation(oText, outSize)
+        oAudio = compensation(oAudio, outSize)
+        oVision = compensation(oVision, outSize)
         
         compensation = torch.ones(self.maxSize-numNode)*self.out_size
         labels = torch.from_numpy(labels)
         labels = torch.hstack((labels, compensation))
-
 
         g = dgl.graph((src, dst))
         g.ndata["text"] = text.to(torch.float64)
         g.ndata["audio"] = audio.to(torch.float64)
         g.ndata["vision"] = vision.to(torch.float64)
         g.ndata["label"] = labels.to(torch.float64)
+
+        g.ndata["oText"] = oText.to(torch.float64)
+        g.ndata["oAudio"] = oAudio.to(torch.float64)
+        g.ndata["oVision"] = oVision.to(torch.float64)
         return g, labels
 
     def __len__(self):

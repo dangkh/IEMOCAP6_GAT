@@ -76,6 +76,7 @@ class GAT_FP(nn.Module):
         self.maskFilter = maskFilter(self.in_size)
         self.num_heads = 16
         self.imputationModule = dglnn.GraphConv(self.in_size,  self.in_size, norm = 'both')
+        self.decodeModule = nn.Linear(self.in_size, self.in_size)
         self.gat1 = nn.ModuleList()
         # two-layer GCN
         for ii in range(len(gcv)-1):
@@ -90,12 +91,23 @@ class GAT_FP(nn.Module):
         self.probality = probality
         # self.reset_parameters()
 
+    def featureFusion(self, tf, af, vf):
+        pass
+
+
     def forward(self, g):
         text = g.ndata["text"].to(torch.float64)
         audio = g.ndata["audio"]
         audio = audio.to(torch.float64)
         video = g.ndata["vision"]
         video = video.to(torch.float64)
+
+        otext = g.ndata["oText"].to(torch.float64)
+        oaudio = g.ndata["oAudio"]
+        oaudio = oaudio.to(torch.float64)
+        ovideo = g.ndata["oVision"]
+        ovideo = ovideo.to(torch.float64)
+
         # text =norm(text)
         # audio =norm(audio)
         # video =norm(video)
@@ -117,7 +129,9 @@ class GAT_FP(nn.Module):
         # stackFT = stackFT.view(-1, 100, self.in_size).to(torch.float64)
         h = stackFT.float()
         h1 = self.imputationModule(g, h)
+        h1 = self.decodeModule(h1)
         h = 0.5 * (h + h1)
+        self.data_mse = h
         # h = h + h1
         h = F.normalize(h, p=1)
         h = self.maskFilter(h)
@@ -150,6 +164,8 @@ class GAT_FP(nn.Module):
         self.textEncoder.reset_parameters()
         self.MMEncoder.reset_parameters()
 
+    def mseLoss(self):
+        return self.data_mse
 
     def rho_loss(self, rho, size_average=True):
         dkl = - rho * torch.log(self.data_rho) - (1-rho)*torch.log(1-self.data_rho) # calculates KL divergence
@@ -217,7 +233,7 @@ if __name__ == "__main__":
     parser.add_argument('--numTest', help='number of test', default=10, type=int)
     parser.add_argument('--batchSize', help='size of batch', default=16, type=int)
     parser.add_argument('--log', action='store_true', default=True, help='save experiment info in output')
-    parser.add_argument('--output', help='savedFile', default='./log.txt')
+    parser.add_argument('--output', help='savedFile', default='./log_v2.txt')
     parser.add_argument('--prePath', help='prepath to directory contain DGL files', default='.')
     parser.add_argument('--numLabel', help='4label vs 6label', default='6')
     parser.add_argument( "--dataset",
