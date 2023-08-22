@@ -34,13 +34,13 @@ def genMissMultiModal(matSize, percent):
     al, be, ga = missingParam(percent)
     errPecent = 1.7
     if matSize[-1] <= 10:
-        errPecent = 5
+        errPecent = 3
     if matSize[-1] <= 3:
         errPecent = 5
     listMask = []
     masks = [np.asarray([[0, 0, 0]]), np.asarray([[0, 0, 1], [0, 1, 0], [1, 0, 0]]), np.asarray([[0, 1, 1], [1, 1, 0], [1, 0, 1]])]
-    if percent > 60:
-        masks = [np.asarray([[0, 0, 0]]), np.asarray([[0, 0, 1], [0, 1, 0], [1, 0, 0]]), np.asarray([[0, 1, 1], [1, 1, 0], [1, 0, 1]]*7)]
+    # if percent > 60:
+    #     masks = [np.asarray([[0, 0, 0]]), np.asarray([[0, 0, 1], [0, 1, 0], [1, 0, 0]]), np.asarray([[0, 1, 1], [1, 1, 0], [1, 0, 1]]*2)]
     for mask, num in ([0, al], [1, be], [2, ga]):
         if num > 0:
             listMask.append(np.repeat(masks[mask], num, axis = 0))
@@ -136,6 +136,11 @@ class IEMOCAP6DGL_GCNET(DGLDataset):
                 mask = genMissMultiModal((3, numNode), self.missing)
                 self.listMask.append(mask)
             np.save(missingPath, np.hstack(self.listMask))
+        # counter = 0
+        # for idx, xx in enumerate(self.listMask):
+        #     counter += np.sum(xx)/np.sum(np.ones_like(xx))
+        # print(counter / len(self.listMask))
+        # stop
         super().__init__(name='dataset_DGL')
 
 

@@ -70,7 +70,8 @@ class GAT_FP(nn.Module):
         self.dropVision = nn.Dropout(0.5)
         self.textEncoder = nn.Linear(1024, 64).to(torch.float64)
         self.in_size = 192
-        self.outMMEncoder = 4
+        self.outMMEncoder = 8
+        # <40 self.outMMencoder = 4
         self.MMEncoder = nn.LSTM(self.in_size, self.outMMEncoder, bidirectional = True).to(torch.float64)
         gcv = [self.in_size, 32, 4]
         self.maskFilter = maskFilter(self.in_size)
@@ -85,14 +86,26 @@ class GAT_FP(nn.Module):
             )
         coef = 1
         self.gat2 = MultiHeadGATCrossModal(self.in_size,  gcv[-1], num_heads = self.num_heads)
-        self.linear = nn.Linear(136, out_size).to(torch.float64)
+        self.linear = nn.Linear(144, out_size).to(torch.float64)
+        # <40 self.linear = 136
         # self.linear = nn.Linear(gcv[-1] * self.num_heads * 7, out_size)
         self.dropout = nn.Dropout(0.75)
         self.probality = probality
         # self.reset_parameters()
 
     def featureFusion(self, tf, af, vf):
-        pass
+        audioOuput = self.audioEncoder(af)
+        audioOuput = self.dropAudio(audioOuput)
+        visionOutput = self.visionEncoder(vf)
+        visionOutput = self.dropVision(visionOutput)
+        textOutput = self.textEncoder(tf)
+        stackFT = torch.hstack([textOutput, audioOuput, visionOutput]).to(torch.float64)
+        newFeature = stackFT.view(-1, 120, self.in_size).to(torch.float64)
+        newFeature = newFeature.permute(1, 0, 2)
+        newFeature, _ = self.MMEncoder(newFeature)
+        newFeature = newFeature.permute(1, 0, 2)
+        newFeature = newFeature.reshape(-1, self.outMMEncoder*2)  
+        return newFeature, stackFT
 
 
     def forward(self, g):
@@ -102,28 +115,25 @@ class GAT_FP(nn.Module):
         video = g.ndata["vision"]
         video = video.to(torch.float64)
 
-        otext = g.ndata["oText"].to(torch.float64)
-        oaudio = g.ndata["oAudio"]
-        oaudio = oaudio.to(torch.float64)
-        ovideo = g.ndata["oVision"]
-        ovideo = ovideo.to(torch.float64)
+        oText = g.ndata["oText"].to(torch.float64)
+        oAudio = g.ndata["oAudio"]
+        oAudio = oAudio.to(torch.float64)
+        oVideo = g.ndata["oVision"]
+        oVideo = oVideo.to(torch.float64)
 
-        # text =norm(text)
-        # audio =norm(audio)
-        # video =norm(video)
-        audioOuput = self.audioEncoder(audio)
-        audioOuput = self.dropAudio(audioOuput)
-        
-        visionOutput = self.visionEncoder(video)
-        
-        visionOutput = self.dropVision(visionOutput)
-        textOutput = self.textEncoder(text)
-        stackFT = torch.hstack([textOutput, audioOuput, visionOutput]).to(torch.float64)
-        newFeature = stackFT.view(-1, 120, self.in_size).to(torch.float64)
-        newFeature = newFeature.permute(1, 0, 2)
-        newFeature, _ = self.MMEncoder(newFeature)
-        newFeature = newFeature.permute(1, 0, 2)
-        newFeature = newFeature.reshape(-1, self.outMMEncoder*2)  
+        newFeature, stackFT = self.featureFusion(text, audio, video)
+        oFeature, oStackFT = self.featureFusion(oText, oAudio, oVideo)
+        # audioOuput = self.audioEncoder(audio)
+        # audioOuput = self.dropAudio(audioOuput)
+        # visionOutput = self.visionEncoder(video)
+        # visionOutput = self.dropVision(visionOutput)
+        # textOutput = self.textEncoder(text)
+        # stackFT = torch.hstack([textOutput, audioOuput, visionOutput]).to(torch.float64)
+        # newFeature = stackFT.view(-1, 120, self.in_size).to(torch.float64)
+        # newFeature = newFeature.permute(1, 0, 2)
+        # newFeature, _ = self.MMEncoder(newFeature)
+        # newFeature = newFeature.permute(1, 0, 2)
+        # newFeature = newFeature.reshape(-1, self.outMMEncoder*2)  
 
         # stackFT = torch.hstack([text, audio, video]).float()  
         # stackFT = stackFT.view(-1, 100, self.in_size).to(torch.float64)
@@ -132,6 +142,7 @@ class GAT_FP(nn.Module):
         h1 = self.decodeModule(h1)
         h = 0.5 * (h + h1)
         self.data_mse = h
+        self.odata = oStackFT.float()
         # h = h + h1
         h = F.normalize(h, p=1)
         h = self.maskFilter(h)
@@ -165,7 +176,7 @@ class GAT_FP(nn.Module):
         self.MMEncoder.reset_parameters()
 
     def mseLoss(self):
-        return self.data_mse
+        return self.data_mse, self.odata
 
     def rho_loss(self, rho, size_average=True):
         dkl = - rho * torch.log(self.data_rho) - (1-rho)*torch.log(1-self.data_rho) # calculates KL divergence
@@ -179,7 +190,7 @@ class GAT_FP(nn.Module):
 def train(trainLoader, testLoader, model, info, numLB):
     # define train/val samples, loss function and optimizer
     loss_fcn = nn.CrossEntropyLoss()
-    
+    loss_imput = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=info['lr'], weight_decay=info['weight_decay'])
     highestAcc = 0
     # training loop
@@ -198,8 +209,10 @@ def train(trainLoader, testLoader, model, info, numLB):
             labels = labels[pos]
             logits = logits[pos]
             # loss = loss_fcn(logits, labels)
-            
-            if int(info['rho']) != -1:
+            if info['reconstructionLoss'] == 'mse':
+                data_mse, odata = model.mseLoss()
+                loss = loss_fcn(logits, labels) + (info['missing']) * 0.01 * loss_imput(data_mse, odata)
+            elif (info['reconstructionLoss'] == 'kl') and (int(info['rho']) != -1):
                 loss = loss_fcn(logits, labels) + (info['missing']) * 0.01 * model.rho_loss(float(info['rho']))
                 # loss = (100 - info['missing']) * 0.01 * loss_fcn(logits, labels) + (info['missing']) * 0.01 * model.rho_loss(float(info['rho']))
             else:
@@ -231,11 +244,14 @@ if __name__ == "__main__":
     parser.add_argument('--missing', help='percentage of missing utterance in MM data', default=0, type=int)
     parser.add_argument('--wFP', action='store_true', default=False, help='edge direction type')
     parser.add_argument('--numTest', help='number of test', default=10, type=int)
-    parser.add_argument('--batchSize', help='size of batch', default=16, type=int)
+    parser.add_argument('--batchSize', help='size of batch', default=64, type=int)
     parser.add_argument('--log', action='store_true', default=True, help='save experiment info in output')
     parser.add_argument('--output', help='savedFile', default='./log_v2.txt')
     parser.add_argument('--prePath', help='prepath to directory contain DGL files', default='.')
     parser.add_argument('--numLabel', help='4label vs 6label', default='6')
+    parser.add_argument('--reconstructionLoss', 
+        help='mse, kl, none. unless set rho number for kl loss, using none loss instead',
+        default='none')
     parser.add_argument( "--dataset",
         type=str,
         default="IEMOCAP",
@@ -253,6 +269,7 @@ if __name__ == "__main__":
             'numTest': args.numTest,
             'wFP': args.wFP,
             'numLabel': args.numLabel,
+            'reconstructionLoss': args.reconstructionLoss,
             'rho': args.rho
         }
     for test in range(args.numTest):
@@ -297,7 +314,7 @@ if __name__ == "__main__":
         for layer in model.children():
            if hasattr(layer, 'reset_parameters'):
                layer.reset_parameters()
-        model.to(DEVICE)
+        model = model.to(DEVICE)
         print(model)
         # model training
         print("Training...")
