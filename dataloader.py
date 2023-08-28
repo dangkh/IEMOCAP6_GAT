@@ -25,26 +25,38 @@ def missingParam(percent):
 
 
 def genMissMultiModal(matSize, percent):
-    index = (percent-10) // 10
-    types = np.asarray([[0, 0, 1], [0, 1, 0], [1, 0, 0]])
+    if matSize[0] == 1:
+        raise "can't generate missing in case only one modality"
+    if matSize[0] == 3:
+        types = np.asarray([[0, 0, 1], [0, 1, 0], [1, 0, 0]])
+    else:
+        types = np.asarray([[0, 0],[0, 0],[0, 0],[0, 0],[0, 0], [0, 1], [1, 0]])
+        if percent >= 20:
+            types = np.asarray([[0, 0],[0, 0], [0, 1], [1, 0]])
+        if percent >= 40:
+            types = np.asarray([[0, 0], [0, 1], [1, 0],  [0, 1], [1, 0],  [0, 1], [1, 0]])
     missPercent = 0
     batch_size = 1
     if matSize[0] != len(types[0]):
         return None
-    al, be, ga = missingParam(percent)
     errPecent = 1.7
     if matSize[-1] <= 10:
         errPecent = 3
     if matSize[-1] <= 3:
         errPecent = 5
-    listMask = []
-    masks = [np.asarray([[0, 0, 0]]), np.asarray([[0, 0, 1], [0, 1, 0], [1, 0, 0]]), np.asarray([[0, 1, 1], [1, 1, 0], [1, 0, 1]])]
-    # if percent > 60:
-    #     masks = [np.asarray([[0, 0, 0]]), np.asarray([[0, 0, 1], [0, 1, 0], [1, 0, 0]]), np.asarray([[0, 1, 1], [1, 1, 0], [1, 0, 1]]*2)]
-    for mask, num in ([0, al], [1, be], [2, ga]):
-        if num > 0:
-            listMask.append(np.repeat(masks[mask], num, axis = 0))
-    missType = np.vstack(listMask)
+    
+    if matSize[0] == 3:        
+        al, be, ga = missingParam(percent)
+        listMask = []
+        masks = [np.asarray([[0, 0, 0]]), np.asarray([[0, 0, 1], [0, 1, 0], [1, 0, 0]]), np.asarray([[0, 1, 1], [1, 1, 0], [1, 0, 1]])]
+        # if percent > 60:
+        #     masks = [np.asarray([[0, 0, 0]]), np.asarray([[0, 0, 1], [0, 1, 0], [1, 0, 0]]), np.asarray([[0, 1, 1], [1, 1, 0], [1, 0, 1]]*2)]
+        for mask, num in ([0, al], [1, be], [2, ga]):
+            if num > 0:
+                listMask.append(np.repeat(masks[mask], num, axis = 0))
+        missType = np.vstack(listMask)
+    else:
+        missType = types
     counter = 0
     while np.abs(missPercent - percent) > 1.0:
         mat = np.zeros((matSize[0], matSize[-1]))
@@ -104,12 +116,14 @@ def read_data(label_path, feature_root):
 
 
 class IEMOCAP6DGL_GCNET(DGLDataset):
-    def __init__(self, trainVids, videoIDs, videoLabels, name2audio, name2text, name2video, missing):
+    def __init__(self, trainVids, videoIDs, videoLabels, name2audio, name2text, name2video, missing, info):
         
         self.trainVids = trainVids
         self.videoIDs = videoIDs
         self.videoLabels = videoLabels
-        self.missing = missing
+        self.modality = info['modality']
+        self.missing = 0 if len(self.modality) == 1 else missing 
+        self.info = info
         self.name2audio, self.name2text, self.name2video, = name2audio, name2text, name2video
         self.listMask = []
         self.maxSize = 120
@@ -124,18 +138,30 @@ class IEMOCAP6DGL_GCNET(DGLDataset):
             tmpLb.extend(videoLabels[v])
         self.out_size = len(np.unique(np.asarray(tmpLb)))
 
-        missingPath = f'./mmask/missing_{self.missing}_rand_{randSTR}.npy'
-        if os.path.isfile(missingPath):
-            mask = np.load(missingPath, allow_pickle=True)
-            currentUt = 0
-            for idx, numNode in enumerate(self.listNumNode):
-                self.listMask.append(mask[:,currentUt:currentUt+numNode])
-                currentUt += numNode
-        else:
-            for idx, numNode in enumerate(self.listNumNode):
-                mask = genMissMultiModal((3, numNode), self.missing)
-                self.listMask.append(mask)
-            np.save(missingPath, np.hstack(self.listMask))
+        if self.missing > 0:
+            missingPath = f'./mmask/missing_{self.missing}_rand_{randSTR}_{self.modality}.npy'
+            if os.path.isfile(missingPath):
+                mask = np.load(missingPath, allow_pickle=True)
+                currentUt = 0
+                for idx, numNode in enumerate(self.listNumNode):
+                    self.listMask.append(mask[:,currentUt:currentUt+numNode])
+                    currentUt += numNode
+            else:
+                for idx, numNode in enumerate(self.listNumNode):
+                    zerosMask = np.zeros((3,numNode))
+                    mask = genMissMultiModal((len(self.modality), numNode), self.missing)
+                    counterModality = 0
+                    if 'l' in self.modality:
+                        zerosMask[0] = mask[counterModality]
+                        counterModality+= 1
+                    if 'a' in self.modality:
+                        zerosMask[1] = mask[counterModality]
+                        counterModality+= 1
+                    if 'v' in self.modality:
+                        zerosMask[2] = mask[counterModality]
+                        counterModality+= 1
+                    self.listMask.append(zerosMask)
+                np.save(missingPath, np.hstack(self.listMask))
         # counter = 0
         # for idx, xx in enumerate(self.listMask):
         #     counter += np.sum(xx)/np.sum(np.ones_like(xx))
@@ -162,14 +188,15 @@ class IEMOCAP6DGL_GCNET(DGLDataset):
         oVision = np.copy(vision)
 
         numNode = len(text)
-        missingMask = self.listMask[index]
-        for ii in range(numNode):
-            if missingMask[0][ii] == 1:
-                text[ii] = 0
-            if missingMask[1][ii] == 1:
-                audio[ii] = 0
-            if missingMask[2][ii] == 1:
-                vision[ii] = 0
+        if self.missing > 0:
+            missingMask = self.listMask[index]
+            for ii in range(numNode):
+                if missingMask[0][ii] == 1:
+                    text[ii] = 0
+                if missingMask[1][ii] == 1:
+                    audio[ii] = 0
+                if missingMask[2][ii] == 1:
+                    vision[ii] = 0
 
         labels = np.asarray(self.videoLabels[name])
         src = []
@@ -205,14 +232,20 @@ class IEMOCAP6DGL_GCNET(DGLDataset):
         labels = torch.hstack((labels, compensation))
 
         g = dgl.graph((src, dst))
-        g.ndata["text"] = text.to(torch.float64)
-        g.ndata["audio"] = audio.to(torch.float64)
-        g.ndata["vision"] = vision.to(torch.float64)
-        g.ndata["label"] = labels.to(torch.float64)
+        if 'l' in self.modality:
+            g.ndata["text"] = text.to(torch.float64)
+            g.ndata["oText"] = oText.to(torch.float64)
 
-        g.ndata["oText"] = oText.to(torch.float64)
-        g.ndata["oAudio"] = oAudio.to(torch.float64)
-        g.ndata["oVision"] = oVision.to(torch.float64)
+        if 'a' in self.modality:
+            g.ndata["audio"] = audio.to(torch.float64)
+            g.ndata["oAudio"] = oAudio.to(torch.float64)
+
+        if 'v' in self.modality:
+            g.ndata["vision"] = vision.to(torch.float64)
+            g.ndata["oVision"] = oVision.to(torch.float64)
+        
+        g.ndata["label"] = labels.to(torch.float64)
+        
         return g, labels
 
     def __len__(self):
@@ -242,8 +275,8 @@ class Iemocap6_Gcnet_Dataset():
         name2text, tdim = read_data(self.path, f'./IEMOCAP/features/deberta-large-4-UTT')
         name2video, vdim = read_data(self.path, f'./IEMOCAP/features/manet_UTT')
 
-        self.trainSet = IEMOCAP6DGL_GCNET(self.trainVids, videoIDs, videoLabels, name2audio, name2text, name2video, self.missing)
-        self.testSet = IEMOCAP6DGL_GCNET(self.testVids, videoIDs, videoLabels, name2audio, name2text, name2video, self.missing)
+        self.trainSet = IEMOCAP6DGL_GCNET(self.trainVids, videoIDs, videoLabels, name2audio, name2text, name2video, self.missing, self.info)
+        self.testSet = IEMOCAP6DGL_GCNET(self.testVids, videoIDs, videoLabels, name2audio, name2text, name2video, self.missing, self.info)
 
         self.out_size = len(np.unique(np.asarray(tmpLb)))
 

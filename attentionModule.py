@@ -155,45 +155,48 @@ class MultiHeadGATInnerLayer(nn.Module):
             return torch.mean(torch.stack(head_outs))
 
 class crossModal(nn.Module):
-    def __init__(self, in_dim, out_dim):
+    def __init__(self, in_dim, out_dim, modality):
         super(crossModal, self).__init__()
+        self.modality = modality
         currentFeatures = np.asarray([0.0] * in_dim)
-        tt, aa, vv  = 64, 128, 192
-        if in_dim == 1247:
-            tt, aa, vv  = 600, 942, 1247
-        self.tt, self.aa, self.vv = tt, aa, vv
-        textMask = np.copy(currentFeatures)
-        textMask[:tt] = 1.0
-        audioMask = np.copy(currentFeatures)
-        audioMask[tt: vv] = 1.0
-        videoMask = np.copy(currentFeatures)
-        videoMask[vv:] = 1.0
+        featureSize = 64
+        self.f1, self.f2, self.f3 = 64, 128, 192
         self.in_dim = in_dim
         self.out_dim = out_dim
-        self.qMaskT = nn.Linear(tt, out_dim, bias=False)
-        self.qMaskA = nn.Linear(aa-tt, out_dim, bias=False)
-        self.qMaskV = nn.Linear(vv-aa, out_dim, bias=False)
-        self.kMaskT = nn.Linear(tt, out_dim, bias=False)
-        self.kMaskA = nn.Linear(aa-tt, out_dim, bias=False)
-        self.kMaskV = nn.Linear(vv-aa, out_dim, bias=False)
-        self.vMaskT = nn.Linear(tt, out_dim, bias=False)
-        self.vMaskA = nn.Linear(aa-tt, out_dim, bias=False)
-        self.vMaskV = nn.Linear(vv-aa, out_dim, bias=False)
-        self.ln = nn.Linear(out_dim * 3, out_dim, bias = True)
+        if len(self.modality) == 3:
+            self.qMask1 = nn.Linear(featureSize, out_dim, bias=False)
+            self.qMask2 = nn.Linear(featureSize, out_dim, bias=False)
+            self.qMask3 = nn.Linear(featureSize, out_dim, bias=False)
+            self.kMask1 = nn.Linear(featureSize, out_dim, bias=False)
+            self.kMask2 = nn.Linear(featureSize, out_dim, bias=False)
+            self.kMask3 = nn.Linear(featureSize, out_dim, bias=False)
+            self.vMask1 = nn.Linear(featureSize, out_dim, bias=False)
+            self.vMask2 = nn.Linear(featureSize, out_dim, bias=False)
+            self.vMask3 = nn.Linear(featureSize, out_dim, bias=False)
+            self.ln = nn.Linear(out_dim * 3, out_dim, bias = True)
+        else:
+            self.qMask1 = nn.Linear(featureSize, out_dim, bias=False)
+            self.qMask2 = nn.Linear(featureSize, out_dim, bias=False)
+            self.kMask1 = nn.Linear(featureSize, out_dim, bias=False)
+            self.kMask2 = nn.Linear(featureSize, out_dim, bias=False)
+            self.vMask1 = nn.Linear(featureSize, out_dim, bias=False)
+            self.vMask2 = nn.Linear(featureSize, out_dim, bias=False)
+            self.ln = nn.Linear(out_dim * 2, out_dim, bias = True)
         self.reset_parameters()
 
     def reset_parameters(self):
         """Reinitialize learnable parameters."""
         gain = nn.init.calculate_gain('relu')
-        nn.init.xavier_normal_(self.qMaskT.weight, gain=gain)
-        nn.init.xavier_normal_(self.kMaskT.weight, gain=gain)
-        nn.init.xavier_normal_(self.vMaskT.weight, gain=gain)
-        nn.init.xavier_normal_(self.qMaskA.weight, gain=gain)
-        nn.init.xavier_normal_(self.kMaskA.weight, gain=gain)
-        nn.init.xavier_normal_(self.vMaskA.weight, gain=gain)
-        nn.init.xavier_normal_(self.qMaskV.weight, gain=gain)
-        nn.init.xavier_normal_(self.kMaskV.weight, gain=gain)
-        nn.init.xavier_normal_(self.vMaskV.weight, gain=gain)
+        nn.init.xavier_normal_(self.qMask1.weight, gain=gain)
+        nn.init.xavier_normal_(self.kMask1.weight, gain=gain)
+        nn.init.xavier_normal_(self.vMask1.weight, gain=gain)
+        nn.init.xavier_normal_(self.qMask2.weight, gain=gain)
+        nn.init.xavier_normal_(self.kMask2.weight, gain=gain)
+        nn.init.xavier_normal_(self.vMask2.weight, gain=gain)
+        if len(self.modality) == 3:
+            nn.init.xavier_normal_(self.qMask3.weight, gain=gain)
+            nn.init.xavier_normal_(self.kMask3.weight, gain=gain)
+            nn.init.xavier_normal_(self.vMask3.weight, gain=gain)
         nn.init.xavier_normal_(self.ln.weight, gain=gain)
         nn.init.constant_(self.ln.bias, 0)
         
@@ -210,20 +213,24 @@ class crossModal(nn.Module):
         return attVal
 
     def forward(self, g, h):
-        attT = self.unitAtt(self.qMaskT, self.kMaskA, self.vMaskA, h[:,:self.tt], h[:,self.tt:self.aa])
-        attA = self.unitAtt(self.qMaskA, self.kMaskT, self.vMaskT, h[:,self.tt:self.aa], h[:,:self.tt])
-        attV = self.unitAtt(self.qMaskV, self.kMaskT, self.vMaskT, h[:,self.aa:], h[:,:self.tt])
-        att = torch.cat((attT, attA, attV), dim = 1)
+        att1 = self.unitAtt(self.qMask1, self.kMask2, self.vMask2, h[:,:self.f1], h[:,self.f1:self.f2])
+        att2 = self.unitAtt(self.qMask2, self.kMask1, self.vMask1, h[:,self.f1:self.f2], h[:,:self.f1])
+        listFt = [att1, att2]
+        if len(self.modality) == 3:
+            att3 = self.unitAtt(self.qMask3, self.kMask1, self.vMask1, h[:,self.f2:], h[:,:self.f1])
+            listFt.append(att3)
+        att = torch.cat(listFt, dim = 1)
         # att = torch.mean(torch.stack([attT,attA,attV], 1), 1)
         att = self.ln(att)
         return att
        
 class MultiHeadGATCrossModal(nn.Module):
-    def __init__(self, in_dim, out_dim, num_heads, merge='cat'):
+    def __init__(self, in_dim, out_dim, num_heads, merge='cat', modality = None):
         super(MultiHeadGATCrossModal, self).__init__()
+        self.modality = modality
         self.heads = nn.ModuleList()
         for i in range(num_heads):
-            self.heads.append(crossModal(in_dim, out_dim))
+            self.heads.append(crossModal(in_dim, out_dim, self.modality))
         self.merge = merge
 
     def forward(self, g, h):

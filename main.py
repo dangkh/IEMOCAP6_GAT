@@ -31,8 +31,9 @@ def checkMissing(data):
     return False
 
 class maskFilter(nn.Module):
-    def __init__(self, in_size):
+    def __init__(self, in_size, modality):
         super().__init__()
+        self.modality = modality
         tt, aa, vv  = 64, 128, 192
         # self.testM = nn.Parameter(torch.rand(in_size, in_size))
         currentFeatures = np.asarray([0.0] * in_size)
@@ -62,19 +63,25 @@ class maskFilter(nn.Module):
         return f'y = {self.textMask.item()} + {self.audioMask.item()} + {self.videoMask.item()}'
 
 class GAT_FP(nn.Module):
-    def __init__(self, out_size, wFP, probality = False):
+    def __init__(self, out_size, wFP, probality = False, modality = "avl"):
         super().__init__()
-        self.audioEncoder = nn.Linear(512, 64).to(torch.float64)
-        self.dropAudio = nn.Dropout(0.5)
-        self.visionEncoder = nn.Linear(1024, 64).to(torch.float64)
-        self.dropVision = nn.Dropout(0.5)
-        self.textEncoder = nn.Linear(1024, 64).to(torch.float64)
-        self.in_size = 192
+        self.modality = modality
+        if 'a' in self.modality:
+            self.audioEncoder = nn.Linear(512, 64).to(torch.float64)
+            self.dropAudio = nn.Dropout(0.5)
+        if 'v' in self.modality:
+            self.visionEncoder = nn.Linear(1024, 64).to(torch.float64)
+            self.dropVision = nn.Dropout(0.5)
+        if 'l' in self.modality:
+            self.textEncoder = nn.Linear(1024, 64).to(torch.float64)
+        self.in_size = len(self.modality)*64
+
         self.outMMEncoder = 8
         # <40 self.outMMencoder = 4
         self.MMEncoder = nn.LSTM(self.in_size, self.outMMEncoder, bidirectional = True).to(torch.float64)
         gcv = [self.in_size, 32, 4]
-        self.maskFilter = maskFilter(self.in_size)
+        if len(self.modality) == 3:
+            self.maskFilter = maskFilter(self.in_size)
         self.num_heads = 16
         self.imputationModule = dglnn.GraphConv(self.in_size,  self.in_size, norm = 'both')
         self.decodeModule = nn.Linear(self.in_size, self.in_size)
@@ -84,22 +91,51 @@ class GAT_FP(nn.Module):
             self.gat1.append(
                 dglnn.GATv2Conv(np.power(self.num_heads, ii) * gcv[ii],  gcv[ii+1], activation=F.relu,  residual=True, num_heads = self.num_heads)
             )
-        coef = 1
-        self.gat2 = MultiHeadGATCrossModal(self.in_size,  gcv[-1], num_heads = self.num_heads)
-        self.linear = nn.Linear(144, out_size).to(torch.float64)
+        if len(self.modality) > 1:
+            self.gat2 = MultiHeadGATCrossModal(self.in_size,  gcv[-1], self.num_heads, merge = 'cat', modality = self.modality)
+        if len(self.modality) != 1:
+            self.linear = nn.Linear(144, out_size).to(torch.float64)
+        else:
+            self.linear = nn.Linear(80, out_size).to(torch.float64)
         # <40 self.linear = 136
         # self.linear = nn.Linear(gcv[-1] * self.num_heads * 7, out_size)
         self.dropout = nn.Dropout(0.75)
         self.probality = probality
         # self.reset_parameters()
 
-    def featureFusion(self, tf, af, vf):
-        audioOuput = self.audioEncoder(af)
-        audioOuput = self.dropAudio(audioOuput)
-        visionOutput = self.visionEncoder(vf)
-        visionOutput = self.dropVision(visionOutput)
-        textOutput = self.textEncoder(tf)
-        stackFT = torch.hstack([textOutput, audioOuput, visionOutput]).to(torch.float64)
+    def featureFusion(self, allF):
+        if len(self.modality) == 3:
+            tf, af, vf = allF
+        elif self.modality == "av":
+            af, vf = allF
+        elif self.modality == "al":
+            tf, af = allF
+        elif self.modality == "vl":
+            tf,  vf = allF
+        elif self.modality == "a":
+            af = allF[0]
+        elif self.modality == "v":
+            vf = allF[0]
+        elif self.modality == "l":
+            tf = allF[0]
+
+        if 'a' in self.modality:
+            audioOuput = self.audioEncoder(af)
+            audioOuput = self.dropAudio(audioOuput)
+        if 'v' in self.modality:
+            visionOutput = self.visionEncoder(vf)
+            visionOutput = self.dropVision(visionOutput)
+        if 'l' in self.modality:
+            textOutput = self.textEncoder(tf)
+        listFt = []
+        if 'l' in self.modality:
+            listFt.append(textOutput)
+        if 'a' in self.modality:
+            listFt.append(audioOuput)
+        if 'v' in self.modality:
+            listFt.append(visionOutput)
+        stackFT = torch.hstack(listFt).to(torch.float64)
+
         newFeature = stackFT.view(-1, 120, self.in_size).to(torch.float64)
         newFeature = newFeature.permute(1, 0, 2)
         newFeature, _ = self.MMEncoder(newFeature)
@@ -109,34 +145,33 @@ class GAT_FP(nn.Module):
 
 
     def forward(self, g):
-        text = g.ndata["text"].to(torch.float64)
-        audio = g.ndata["audio"]
-        audio = audio.to(torch.float64)
-        video = g.ndata["vision"]
-        video = video.to(torch.float64)
+        if 'l' in self.modality:
+            text = g.ndata["text"].to(torch.float64)
+            oText = g.ndata["oText"].to(torch.float64)
+        if 'a' in self.modality:
+            audio = g.ndata["audio"]
+            audio = audio.to(torch.float64)
+            oAudio = g.ndata["oAudio"]
+            oAudio = oAudio.to(torch.float64)
+        if 'v' in self.modality:
+            video = g.ndata["vision"]
+            video = video.to(torch.float64)
+            oVideo = g.ndata["oVision"]
+            oVideo = oVideo.to(torch.float64)
 
-        oText = g.ndata["oText"].to(torch.float64)
-        oAudio = g.ndata["oAudio"]
-        oAudio = oAudio.to(torch.float64)
-        oVideo = g.ndata["oVision"]
-        oVideo = oVideo.to(torch.float64)
-
-        newFeature, stackFT = self.featureFusion(text, audio, video)
-        oFeature, oStackFT = self.featureFusion(oText, oAudio, oVideo)
-        # audioOuput = self.audioEncoder(audio)
-        # audioOuput = self.dropAudio(audioOuput)
-        # visionOutput = self.visionEncoder(video)
-        # visionOutput = self.dropVision(visionOutput)
-        # textOutput = self.textEncoder(text)
-        # stackFT = torch.hstack([textOutput, audioOuput, visionOutput]).to(torch.float64)
-        # newFeature = stackFT.view(-1, 120, self.in_size).to(torch.float64)
-        # newFeature = newFeature.permute(1, 0, 2)
-        # newFeature, _ = self.MMEncoder(newFeature)
-        # newFeature = newFeature.permute(1, 0, 2)
-        # newFeature = newFeature.reshape(-1, self.outMMEncoder*2)  
-
-        # stackFT = torch.hstack([text, audio, video]).float()  
-        # stackFT = stackFT.view(-1, 100, self.in_size).to(torch.float64)
+        listFt = []
+        listFOt = []
+        if 'l' in self.modality:
+            listFt.append(text)
+            listFOt.append(oText)
+        if 'a' in self.modality:
+            listFt.append(audio)
+            listFOt.append(oAudio)
+        if 'v' in self.modality:
+            listFt.append(video)
+            listFOt.append(oVideo)
+        newFeature, stackFT = self.featureFusion(listFt)
+        oFeature, oStackFT = self.featureFusion(listFOt)
         h = stackFT.float()
         h1 = self.imputationModule(g, h)
         h1 = self.decodeModule(h1)
@@ -145,8 +180,10 @@ class GAT_FP(nn.Module):
         self.odata = oStackFT.float()
         # h = h + h1
         h = F.normalize(h, p=1)
-        h = self.maskFilter(h)
-        h3 = self.gat2(g, h)
+        if len(self.modality) == 3:
+            h = self.maskFilter(h, self.modality)
+        if len(self.modality) > 1:
+            h3 = self.gat2(g, h)
         for i, layer in enumerate(self.gat1):
             if i != 0:
                 h = self.dropout(h)
@@ -158,7 +195,10 @@ class GAT_FP(nn.Module):
                 self.data_rho = torch.mean(self.firstGCN.reshape(-1, 16*32), 0)
         
         h = torch.reshape(h, (len(h), -1))
-        h = torch.cat((h,newFeature,h3), 1)
+        if len(self.modality) > 1:
+            h = torch.cat((h,newFeature,h3), 1)
+        else:
+            h = torch.cat((h,newFeature), 1)
         h = self.linear(h)
         return h
 
@@ -252,6 +292,9 @@ if __name__ == "__main__":
     parser.add_argument('--reconstructionLoss', 
         help='mse, kl, none. unless set rho number for kl loss, using none loss instead',
         default='none')
+    parser.add_argument('--modality', 
+        help='avl, av, al, vl, a, v, l',
+        default='avl')
     parser.add_argument( "--dataset",
         type=str,
         default="IEMOCAP",
@@ -260,6 +303,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     print(f"Training with DGL built-in GraphConv module.")
     torch.cuda.empty_cache()
+    typeModal = ['avl', 'av', 'al', 'vl', 'a', 'v', 'l']
+    if args.modality not in typeModal:
+        raise "chosen modality not in available list"
     info = {
             'numEpoch': args.E,
             'lr': args.lr, 
@@ -270,6 +316,7 @@ if __name__ == "__main__":
             'wFP': args.wFP,
             'numLabel': args.numLabel,
             'reconstructionLoss': args.reconstructionLoss,
+            'modality': args.modality,
             'rho': args.rho
         }
     for test in range(args.numTest):
@@ -310,7 +357,7 @@ if __name__ == "__main__":
 
         # create GCN model
         out_size = data.out_size 
-        model = GAT_FP(out_size, args.wFP, probality = True)
+        model = GAT_FP(out_size, args.wFP, probality = True, modality = args.modality)
         for layer in model.children():
            if hasattr(layer, 'reset_parameters'):
                layer.reset_parameters()
