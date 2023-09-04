@@ -31,9 +31,8 @@ def checkMissing(data):
     return False
 
 class maskFilter(nn.Module):
-    def __init__(self, in_size, modality):
+    def __init__(self, in_size):
         super().__init__()
-        self.modality = modality
         tt, aa, vv  = 64, 128, 192
         # self.testM = nn.Parameter(torch.rand(in_size, in_size))
         currentFeatures = np.asarray([0.0] * in_size)
@@ -63,7 +62,7 @@ class maskFilter(nn.Module):
         return f'y = {self.textMask.item()} + {self.audioMask.item()} + {self.videoMask.item()}'
 
 class GAT_FP(nn.Module):
-    def __init__(self, out_size, wFP, probality = False, modality = "avl"):
+    def __init__(self, out_size, wFP, probality = False, modality = "avl", lambd = 0.1):
         super().__init__()
         self.modality = modality
         if 'a' in self.modality:
@@ -101,6 +100,7 @@ class GAT_FP(nn.Module):
         # self.linear = nn.Linear(gcv[-1] * self.num_heads * 7, out_size)
         self.dropout = nn.Dropout(0.75)
         self.probality = probality
+        self.lambd = lambd
         # self.reset_parameters()
 
     def featureFusion(self, allF):
@@ -175,13 +175,13 @@ class GAT_FP(nn.Module):
         h = stackFT.float()
         h1 = self.imputationModule(g, h)
         h1 = self.decodeModule(h1)
-        h = 0.5 * (h + h1)
+        h = self.lambd * h + (1-self.lambd) * h1
         self.data_mse = h
         self.odata = oStackFT.float()
         # h = h + h1
         h = F.normalize(h, p=1)
         if len(self.modality) == 3:
-            h = self.maskFilter(h, self.modality)
+            h = self.maskFilter(h)
         if len(self.modality) > 1:
             h3 = self.gat2(g, h)
         for i, layer in enumerate(self.gat1):
@@ -295,6 +295,7 @@ if __name__ == "__main__":
     parser.add_argument('--modality', 
         help='avl, av, al, vl, a, v, l',
         default='avl')
+    parser.add_argument('--lambd', help='imputation contribution', default=0.5, type=float)
     parser.add_argument( "--dataset",
         type=str,
         default="IEMOCAP",
@@ -317,6 +318,7 @@ if __name__ == "__main__":
             'numLabel': args.numLabel,
             'reconstructionLoss': args.reconstructionLoss,
             'modality': args.modality,
+            'lambd': args.lambd,
             'rho': args.rho
         }
     for test in range(args.numTest):
@@ -357,7 +359,7 @@ if __name__ == "__main__":
 
         # create GCN model
         out_size = data.out_size 
-        model = GAT_FP(out_size, args.wFP, probality = True, modality = args.modality)
+        model = GAT_FP(out_size, args.wFP, probality = True, modality = args.modality, lambd = args.lambd)
         for layer in model.children():
            if hasattr(layer, 'reset_parameters'):
                layer.reset_parameters()

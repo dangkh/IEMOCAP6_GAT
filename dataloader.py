@@ -139,7 +139,10 @@ class IEMOCAP6DGL_GCNET(DGLDataset):
         self.out_size = len(np.unique(np.asarray(tmpLb)))
 
         if self.missing > 0:
-            missingPath = f'./mmask/missing_{self.missing}_rand_{randSTR}_{self.modality}.npy'
+            if len(self.modality) == 2:
+                missingPath = f'./mmask/missing_{self.missing}_rand_{randSTR}_{self.modality}.npy'
+            else:
+                missingPath = f'./mmask/missing_{self.missing}_rand_{randSTR}.npy'
             if os.path.isfile(missingPath):
                 mask = np.load(missingPath, allow_pickle=True)
                 currentUt = 0
