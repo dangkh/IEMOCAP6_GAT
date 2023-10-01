@@ -124,8 +124,13 @@ class GAT_FP(nn.Module):
         newFeature, stackFT = self.featureFusion(text, audio, video)
         oFeature, oStackFT = self.featureFusion(oText, oAudio, oVideo)
         h = stackFT.float()
-        h1 = self.imputationModule(g, h)
-        h1 = self.decodeModule(h1)
+        if args.featureEstimate == 'FE':
+            h1 = self.imputationModule(g, h)
+            h1 = self.decodeModule(h1)
+        elif args.featureEstimate == 'Mean':
+            pass
+        else:
+            pass
         h = 0.5 * (h + h1)
         self.data_mse = h
         self.odata = oStackFT.float()
@@ -235,6 +240,7 @@ if __name__ == "__main__":
     parser.add_argument('--output', help='savedFile', default='./log_v2.txt')
     parser.add_argument('--prePath', help='prepath to directory contain DGL files', default='.')
     parser.add_argument('--numLabel', help='4label vs 6label', default='6')
+    parser.add_argument('--featureEstimate', help='Zero, Mean, FE', default='FE')
     parser.add_argument('--reconstructionLoss', 
         help='mse, kl, none. unless set rho number for kl loss, using none loss instead',
         default='none')
@@ -256,6 +262,7 @@ if __name__ == "__main__":
             'wFP': args.wFP,
             'numLabel': args.numLabel,
             'reconstructionLoss': args.reconstructionLoss,
+            'featureEstimate': args.featureEstimate,
             'rho': args.rho
         }
     for test in range(args.numTest):
