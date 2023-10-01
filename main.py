@@ -123,20 +123,6 @@ class GAT_FP(nn.Module):
 
         newFeature, stackFT = self.featureFusion(text, audio, video)
         oFeature, oStackFT = self.featureFusion(oText, oAudio, oVideo)
-        # audioOuput = self.audioEncoder(audio)
-        # audioOuput = self.dropAudio(audioOuput)
-        # visionOutput = self.visionEncoder(video)
-        # visionOutput = self.dropVision(visionOutput)
-        # textOutput = self.textEncoder(text)
-        # stackFT = torch.hstack([textOutput, audioOuput, visionOutput]).to(torch.float64)
-        # newFeature = stackFT.view(-1, 120, self.in_size).to(torch.float64)
-        # newFeature = newFeature.permute(1, 0, 2)
-        # newFeature, _ = self.MMEncoder(newFeature)
-        # newFeature = newFeature.permute(1, 0, 2)
-        # newFeature = newFeature.reshape(-1, self.outMMEncoder*2)  
-
-        # stackFT = torch.hstack([text, audio, video]).float()  
-        # stackFT = stackFT.view(-1, 100, self.in_size).to(torch.float64)
         h = stackFT.float()
         h1 = self.imputationModule(g, h)
         h1 = self.decodeModule(h1)
@@ -286,11 +272,6 @@ if __name__ == "__main__":
             print(info, file = sourceFile)
             sourceFile.close()
                  
-        # dataPath  = './IEMOCAP_features/IEMOCAP_features.pkl'
-        # data = emotionDataset(missing = args.missing, path = dataPath)
-        # trainSet, testSet = data.trainSet, data.testSet
-        # trainLoader = GraphDataLoader( dataset=trainSet, batch_size=args.batchSize, shuffle=True)
-        # testLoader = GraphDataLoader( dataset=testSet, batch_size=args.batchSize)
         numLB = 6
         if args.numLabel =='4':
             numLB = 4
