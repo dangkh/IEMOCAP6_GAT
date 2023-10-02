@@ -79,14 +79,20 @@ class GAT_FP(nn.Module):
         self.imputationModule = dglnn.GraphConv(self.in_size,  self.in_size, norm = 'both')
         self.decodeModule = nn.Linear(self.in_size, self.in_size)
         self.gat1 = nn.ModuleList()
-        # two-layer GCN
-        for ii in range(len(gcv)-1):
-            self.gat1.append(
-                dglnn.GATv2Conv(np.power(self.num_heads, ii) * gcv[ii],  gcv[ii+1], activation=F.relu,  residual=True, num_heads = self.num_heads)
-            )
+        if args.usingGAT:
+            # two-layer GCN
+            for ii in range(len(gcv)-1):
+                self.gat1.append(
+                    dglnn.GATv2Conv(np.power(self.num_heads, ii) * gcv[ii],  gcv[ii+1], activation=F.relu,  residual=True, num_heads = self.num_heads)
+                )
+        else:
+            self.gat1.append(dglnn.GraphConv(self.in_size,  gcv[-1], norm = 'both'))
         coef = 1
         self.gat2 = MultiHeadGATCrossModal(self.in_size,  gcv[-1], num_heads = self.num_heads)
-        self.linear = nn.Linear(144, out_size).to(torch.float64)
+        if args.crossModal:            
+            self.linear = nn.Linear(144, out_size).to(torch.float64)
+        else:
+            self.linear = nn.Linear(80, out_size).to(torch.float64)
         # <40 self.linear = 136
         # self.linear = nn.Linear(gcv[-1] * self.num_heads * 7, out_size)
         self.dropout = nn.Dropout(0.75)
@@ -128,16 +134,20 @@ class GAT_FP(nn.Module):
             h1 = self.imputationModule(g, h)
             h1 = self.decodeModule(h1)
         elif args.featureEstimate == 'Mean':
+            raise "Error selected feature Estimation not implemented"
+        elif args.featureEstimate == 'Zero':
             pass
         else:
-            pass
+            raise "Error selected feature Estimation not implemented"
         h = 0.5 * (h + h1)
         self.data_mse = h
         self.odata = oStackFT.float()
         # h = h + h1
         h = F.normalize(h, p=1)
         h = self.maskFilter(h)
-        h3 = self.gat2(g, h)
+        if args.crossModal:
+            h3 = self.gat2(g, h)
+
         for i, layer in enumerate(self.gat1):
             if i != 0:
                 h = self.dropout(h)
@@ -149,7 +159,10 @@ class GAT_FP(nn.Module):
                 self.data_rho = torch.mean(self.firstGCN.reshape(-1, 16*32), 0)
         
         h = torch.reshape(h, (len(h), -1))
-        h = torch.cat((h,newFeature,h3), 1)
+        if args.crossModal:
+            h = torch.cat((h,newFeature,h3), 1)
+        else:
+            h = torch.cat((h,newFeature), 1)
         h = self.linear(h)
         return h
 
@@ -241,6 +254,8 @@ if __name__ == "__main__":
     parser.add_argument('--prePath', help='prepath to directory contain DGL files', default='.')
     parser.add_argument('--numLabel', help='4label vs 6label', default='6')
     parser.add_argument('--featureEstimate', help='Zero, Mean, FE', default='FE')
+    parser.add_argument('--crossModal',action='store_true', default=False, help='using crossModal')
+    parser.add_argument('--usingGAT',action='store_true', default=False, help='using GAT')
     parser.add_argument('--reconstructionLoss', 
         help='mse, kl, none. unless set rho number for kl loss, using none loss instead',
         default='none')
