@@ -86,14 +86,13 @@ class GAT_FP(nn.Module):
                     dglnn.GATv2Conv(np.power(self.num_heads, ii) * gcv[ii],  gcv[ii+1], activation=F.relu,  residual=True, num_heads = self.num_heads)
                 )
         else:
-            self.gat1.append(dglnn.GraphConv(self.in_size,  gcv[-1], norm = 'both'))
+            self.gat1.append(dglnn.GraphConv(self.in_size,  self.num_heads * gcv[-1], norm = 'both'))
         coef = 1
         self.gat2 = MultiHeadGATCrossModal(self.in_size,  gcv[-1], num_heads = self.num_heads)
         if args.crossModal:            
-            self.linear = nn.Linear(144, out_size).to(torch.float64)
+            self.linear = nn.Linear(self.num_heads * 4 * 2 + self.outMMEncoder * 2, out_size).to(torch.float64)
         else:
-            self.linear = nn.Linear(80, out_size).to(torch.float64)
-        # <40 self.linear = 136
+            self.linear = nn.Linear(self.num_heads * 4 + self.outMMEncoder * 2, out_size).to(torch.float64)
         # self.linear = nn.Linear(gcv[-1] * self.num_heads * 7, out_size)
         self.dropout = nn.Dropout(0.75)
         self.probality = probality
@@ -156,7 +155,7 @@ class GAT_FP(nn.Module):
             h = layer(g, h)
             if i == 0 and self.probality:
                 self.firstGCN = torch.sigmoid(h)
-                self.data_rho = torch.mean(self.firstGCN.reshape(-1, 16*32), 0)
+                self.data_rho = torch.mean(self.firstGCN.reshape(-1, self.num_heads*32), 0)
         
         h = torch.reshape(h, (len(h), -1))
         if args.crossModal:

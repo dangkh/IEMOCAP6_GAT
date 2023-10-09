@@ -162,12 +162,6 @@ class crossModal(nn.Module):
         if in_dim == 1247:
             tt, aa, vv  = 600, 942, 1247
         self.tt, self.aa, self.vv = tt, aa, vv
-        textMask = np.copy(currentFeatures)
-        textMask[:tt] = 1.0
-        audioMask = np.copy(currentFeatures)
-        audioMask[tt: vv] = 1.0
-        videoMask = np.copy(currentFeatures)
-        videoMask[vv:] = 1.0
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.qMaskT = nn.Linear(tt, out_dim, bias=False)
@@ -179,7 +173,7 @@ class crossModal(nn.Module):
         self.vMaskT = nn.Linear(tt, out_dim, bias=False)
         self.vMaskA = nn.Linear(aa-tt, out_dim, bias=False)
         self.vMaskV = nn.Linear(vv-aa, out_dim, bias=False)
-        self.ln = nn.Linear(out_dim * 3, out_dim, bias = True)
+        self.ln = nn.Linear(out_dim * 3 * 2, out_dim, bias = True)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -213,7 +207,10 @@ class crossModal(nn.Module):
         attT = self.unitAtt(self.qMaskT, self.kMaskA, self.vMaskA, h[:,:self.tt], h[:,self.tt:self.aa])
         attA = self.unitAtt(self.qMaskA, self.kMaskT, self.vMaskT, h[:,self.tt:self.aa], h[:,:self.tt])
         attV = self.unitAtt(self.qMaskV, self.kMaskT, self.vMaskT, h[:,self.aa:], h[:,:self.tt])
-        att = torch.cat((attT, attA, attV), dim = 1)
+        attT2 = self.unitAtt(self.qMaskT, self.kMaskA, self.vMaskA, h[:,:self.tt], h[:,self.aa:])
+        attA2 = self.unitAtt(self.qMaskA, self.kMaskT, self.vMaskT, h[:,self.tt:self.aa], h[:,self.aa:])
+        attV2 = self.unitAtt(self.qMaskV, self.kMaskT, self.vMaskT, h[:,self.aa:], h[:,self.tt:self.aa])
+        att = torch.cat((attT, attA, attV, attT2, attA2, attV2), dim = 1)
         # att = torch.mean(torch.stack([attT,attA,attV], 1), 1)
         att = self.ln(att)
         return att
