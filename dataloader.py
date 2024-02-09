@@ -54,6 +54,7 @@ def genMissMultiModal(matSize, percent):
         missPercent = mat.sum() / (matSize[0] * matSize[-1]) * 100
         print(missPercent, errPecent, matSize[-1])
         if (np.abs(missPercent - percent) < errPecent) & (np.abs(missPercent - percent) > 0):
+            mat[:,0] = missType[0]
             return mat
     return np.zeros((matSize[0], matSize[-1]))
         

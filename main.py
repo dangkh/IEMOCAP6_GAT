@@ -75,7 +75,7 @@ class GAT_FP(nn.Module):
         self.MMEncoder = nn.LSTM(self.in_size, self.outMMEncoder, bidirectional = True).to(torch.float64)
         gcv = [self.in_size, 32, 4]
         self.maskFilter = maskFilter(self.in_size)
-        self.num_heads = 16
+        self.num_heads = 4
         self.imputationModule = dglnn.GraphConv(self.in_size,  self.in_size, norm = 'both')
         self.decodeModule = nn.Linear(self.in_size, self.in_size)
         self.gat1 = nn.ModuleList()
@@ -86,7 +86,7 @@ class GAT_FP(nn.Module):
                     dglnn.GATv2Conv(np.power(self.num_heads, ii) * gcv[ii],  gcv[ii+1], activation=F.relu,  residual=True, num_heads = self.num_heads)
                 )
         else:
-            self.gat1.append(dglnn.GraphConv(self.in_size,  self.num_heads * gcv[-1], norm = 'both'))
+            self.gat1.append(nn.Linear(self.in_size,  self.num_heads * gcv[-1]))
         coef = 1
         self.gat2 = MultiHeadGATCrossModal(self.in_size,  gcv[-1], num_heads = self.num_heads)
         if args.crossModal:            
@@ -152,7 +152,10 @@ class GAT_FP(nn.Module):
                 h = self.dropout(h)
             h = h.float()
             h = torch.reshape(h, (len(h), -1))
-            h = layer(g, h)
+            if args.usingGAT:
+                h = layer(g, h)
+            else:
+                h = layer(h)
             if i == 0 and self.probality:
                 self.firstGCN = torch.sigmoid(h)
                 self.data_rho = torch.mean(self.firstGCN.reshape(-1, self.num_heads*32), 0)
@@ -277,6 +280,8 @@ if __name__ == "__main__":
             'numLabel': args.numLabel,
             'reconstructionLoss': args.reconstructionLoss,
             'featureEstimate': args.featureEstimate,
+            'crossModal': args.crossModal,
+            'usingGAT': args.usingGAT,
             'rho': args.rho
         }
     for test in range(args.numTest):
