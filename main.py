@@ -227,12 +227,11 @@ def train(trainLoader, testLoader, model, info, numLB):
             totalLoss += loss.item()
             loss.backward()
             optimizer.step()
-        # acc = evaluate(trainLoader, model, numLB)
         acc  = -1
         acctest = evaluate(testLoader, model, numLB)
         print(
-            "Epoch {:05d} | Loss {:.4f} | Accuracy_train {:.4f} | Accuracy_test {:.4f} ".format(
-                epoch, totalLoss, acc, acctest
+            "Epoch {:05d} | Loss {:.4f} | Accuracy_test {:.4f} ".format(
+                epoch, totalLoss, acctest
             )
         )
         highestAcc = max(highestAcc, acctest)
