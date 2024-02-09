@@ -22,7 +22,7 @@ from tqdm import tqdm
 from attentionModule import *
 from dgl.nn import GraphConv, SumPooling, AvgPooling
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+from torch.nn import init
 
 
 def checkMissing(data):
@@ -62,7 +62,7 @@ class maskFilter(nn.Module):
         return f'y = {self.textMask.item()} + {self.audioMask.item()} + {self.videoMask.item()}'
 
 class GAT_FP(nn.Module):
-    def __init__(self, out_size, wFP, numFP):
+    def __init__(self, out_size, wFP, probality = False):
         super().__init__()
         self.audioEncoder = nn.Linear(512, 64).to(torch.float64)
         self.dropAudio = nn.Dropout(0.5)
@@ -70,23 +70,48 @@ class GAT_FP(nn.Module):
         self.dropVision = nn.Dropout(0.5)
         self.textEncoder = nn.Linear(1024, 64).to(torch.float64)
         self.in_size = 192
-        self.outMMEncoder = 4
+        self.outMMEncoder = 8
+        # <40 self.outMMencoder = 4
         self.MMEncoder = nn.LSTM(self.in_size, self.outMMEncoder, bidirectional = True).to(torch.float64)
         gcv = [self.in_size, 32, 4]
         self.maskFilter = maskFilter(self.in_size)
-        self.num_heads = 16
-        self.GATFP = dglnn.GraphConv(self.in_size,  self.in_size, norm = 'both', weight=False)
+        self.num_heads = 4
+        self.imputationModule = dglnn.GraphConv(self.in_size,  self.in_size, norm = 'both')
+        self.decodeModule = nn.Linear(self.in_size, self.in_size)
         self.gat1 = nn.ModuleList()
-        # two-layer GCN
-        for ii in range(len(gcv)-1):
-            self.gat1.append(
-                dglnn.GATv2Conv(np.power(self.num_heads, ii) * gcv[ii],  gcv[ii+1], activation=F.relu,  residual=True, num_heads = self.num_heads)
-            )
+        if args.usingGAT:
+            # two-layer GCN
+            for ii in range(len(gcv)-1):
+                self.gat1.append(
+                    dglnn.GATv2Conv(np.power(self.num_heads, ii) * gcv[ii],  gcv[ii+1], activation=F.relu,  residual=True, num_heads = self.num_heads)
+                )
+        else:
+            self.gat1.append(nn.Linear(self.in_size,  self.num_heads * gcv[-1]))
         coef = 1
         self.gat2 = MultiHeadGATCrossModal(self.in_size,  gcv[-1], num_heads = self.num_heads)
-        self.linear = nn.Linear(136, out_size).to(torch.float64)
+        if args.crossModal:            
+            self.linear = nn.Linear(self.num_heads * 4 * 2 + self.outMMEncoder * 2, out_size).to(torch.float64)
+        else:
+            self.linear = nn.Linear(self.num_heads * 4 + self.outMMEncoder * 2, out_size).to(torch.float64)
         # self.linear = nn.Linear(gcv[-1] * self.num_heads * 7, out_size)
-        self.dropout = nn.Dropout(0.5)
+        self.dropout = nn.Dropout(0.75)
+        self.probality = probality
+        # self.reset_parameters()
+
+    def featureFusion(self, tf, af, vf):
+        audioOuput = self.audioEncoder(af)
+        audioOuput = self.dropAudio(audioOuput)
+        visionOutput = self.visionEncoder(vf)
+        visionOutput = self.dropVision(visionOutput)
+        textOutput = self.textEncoder(tf)
+        stackFT = torch.hstack([textOutput, audioOuput, visionOutput]).to(torch.float64)
+        newFeature = stackFT.view(-1, 120, self.in_size).to(torch.float64)
+        newFeature = newFeature.permute(1, 0, 2)
+        newFeature, _ = self.MMEncoder(newFeature)
+        newFeature = newFeature.permute(1, 0, 2)
+        newFeature = newFeature.reshape(-1, self.outMMEncoder*2)  
+        return newFeature, stackFT
+
 
     def forward(self, g):
         text = g.ndata["text"].to(torch.float64)
@@ -94,49 +119,84 @@ class GAT_FP(nn.Module):
         audio = audio.to(torch.float64)
         video = g.ndata["vision"]
         video = video.to(torch.float64)
-        # text =norm(text)
-        # audio =norm(audio)
-        # video =norm(video)
-        audioOuput = self.audioEncoder(audio)
-        audioOuput = self.dropAudio(audioOuput)
-        
-        visionOutput = self.visionEncoder(video)
-        
-        visionOutput = self.dropVision(visionOutput)
-        textOutput = self.textEncoder(text)
-        stackFT = torch.hstack([textOutput, audioOuput, visionOutput]).to(torch.float64)
-        newFeature = stackFT.view(-1, 120, self.in_size).to(torch.float64)
-        newFeature = newFeature.permute(1, 0, 2)
-        newFeature, _ = self.MMEncoder(newFeature)
-        newFeature = newFeature.permute(1, 0, 2)
-        newFeature = newFeature.reshape(-1, self.outMMEncoder*2)  
 
-        # stackFT = torch.hstack([text, audio, video]).float()  
-        # stackFT = stackFT.view(-1, 100, self.in_size).to(torch.float64)
+        oText = g.ndata["oText"].to(torch.float64)
+        oAudio = g.ndata["oAudio"]
+        oAudio = oAudio.to(torch.float64)
+        oVideo = g.ndata["oVision"]
+        oVideo = oVideo.to(torch.float64)
+
+        newFeature, stackFT = self.featureFusion(text, audio, video)
+        oFeature, oStackFT = self.featureFusion(oText, oAudio, oVideo)
         h = stackFT.float()
-        h1 = self.GATFP(g, h)
+        if args.featureEstimate == 'FE':
+            h1 = self.imputationModule(g, h)
+            h1 = self.decodeModule(h1)
+        elif args.featureEstimate == 'Mean':
+            raise "Error selected feature Estimation not implemented"
+        elif args.featureEstimate == 'Zero':
+            pass
+        else:
+            raise "Error selected feature Estimation not implemented"
         h = 0.5 * (h + h1)
+        self.data_mse = h
+        self.odata = oStackFT.float()
         # h = h + h1
         h = F.normalize(h, p=1)
         h = self.maskFilter(h)
-        h3 = self.gat2(g, h)
+        if args.crossModal:
+            h3 = self.gat2(g, h)
+
         for i, layer in enumerate(self.gat1):
             if i != 0:
                 h = self.dropout(h)
             h = h.float()
             h = torch.reshape(h, (len(h), -1))
-            h = layer(g, h)
+            if args.usingGAT:
+                h = layer(g, h)
+            else:
+                h = layer(h)
+            if i == 0 and self.probality:
+                self.firstGCN = torch.sigmoid(h)
+                self.data_rho = torch.mean(self.firstGCN.reshape(-1, self.num_heads*32), 0)
         
         h = torch.reshape(h, (len(h), -1))
-        h = torch.cat((h,newFeature,h3), 1)
+        if args.crossModal:
+            h = torch.cat((h,newFeature,h3), 1)
+        else:
+            h = torch.cat((h,newFeature), 1)
         h = self.linear(h)
         return h
+
+    def reset_parameters(self):
+        self.imputationModule.reset_parameters()
+        for i, layer in enumerate(self.gat1):
+            layer.reset_parameters()
+        init.xavier_uniform_(self.linear.weight, gain=1)
+        nn.init.constant_(self.linear.bias, 0)
+        init.xavier_uniform_(self.audioEncoder.weight, gain=1)
+        nn.init.constant_(self.audioEncoder.bias, 0)
+        init.xavier_uniform_(self.visionEncoder.weight, gain=1)
+        nn.init.constant_(self.visionEncoder.bias, 0)
+        self.textEncoder.reset_parameters()
+        self.MMEncoder.reset_parameters()
+
+    def mseLoss(self):
+        return self.data_mse, self.odata
+
+    def rho_loss(self, rho, size_average=True):
+        dkl = - rho * torch.log(self.data_rho) - (1-rho)*torch.log(1-self.data_rho) # calculates KL divergence
+        if size_average:
+            self._rho_loss = dkl.mean()
+        else:
+            self._rho_loss = dkl.sum()
+        return self._rho_loss
 
 
 def train(trainLoader, testLoader, model, info, numLB):
     # define train/val samples, loss function and optimizer
     loss_fcn = nn.CrossEntropyLoss()
-    
+    loss_imput = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=info['lr'], weight_decay=info['weight_decay'])
     highestAcc = 0
     # training loop
@@ -154,11 +214,21 @@ def train(trainLoader, testLoader, model, info, numLB):
             pos = torch.where(labels != numLB)
             labels = labels[pos]
             logits = logits[pos]
-            loss = loss_fcn(logits, labels)
+            # loss = loss_fcn(logits, labels)
+            if info['reconstructionLoss'] == 'mse':
+                data_mse, odata = model.mseLoss()
+                loss = loss_fcn(logits, labels) + (info['missing']) * 0.01 * loss_imput(data_mse, odata)
+            elif (info['reconstructionLoss'] == 'kl') and (int(info['rho']) != -1):
+                loss = loss_fcn(logits, labels) + (info['missing']) * 0.01 * model.rho_loss(float(info['rho']))
+                # loss = (100 - info['missing']) * 0.01 * loss_fcn(logits, labels) + (info['missing']) * 0.01 * model.rho_loss(float(info['rho']))
+            else:
+                loss = loss_fcn(logits, labels)
+
             totalLoss += loss.item()
             loss.backward()
             optimizer.step()
-        acc = evaluate(trainLoader, model, numLB)
+        # acc = evaluate(trainLoader, model, numLB)
+        acc  = -1
         acctest = evaluate(testLoader, model, numLB)
         print(
             "Epoch {:05d} | Loss {:.4f} | Accuracy_train {:.4f} | Accuracy_test {:.4f} ".format(
@@ -174,17 +244,23 @@ if __name__ == "__main__":
     parser.add_argument('--E', help='number of epochs', default=50, type=int)
     parser.add_argument('--seed', help='type of seed: random vs fix', default='random')
     parser.add_argument('--lr', help='learning rate', default=0.003, type=float)
+    parser.add_argument('--rho', help='probality default', default=-1.0, type=float)
     parser.add_argument('--weight_decay', help='weight decay', default=0.00001, type=float)
     parser.add_argument('--edgeType', help='type of edge:0 for similarity and 1 for other', default=0, type=int)
     parser.add_argument('--missing', help='percentage of missing utterance in MM data', default=0, type=int)
     parser.add_argument('--wFP', action='store_true', default=False, help='edge direction type')
-    parser.add_argument('--numFP', help='number of FP layer', default=5, type=int)
     parser.add_argument('--numTest', help='number of test', default=10, type=int)
-    parser.add_argument('--batchSize', help='size of batch', default=16, type=int)
+    parser.add_argument('--batchSize', help='size of batch', default=64, type=int)
     parser.add_argument('--log', action='store_true', default=True, help='save experiment info in output')
-    parser.add_argument('--output', help='savedFile', default='./log.txt')
+    parser.add_argument('--output', help='savedFile', default='./log_v2.txt')
     parser.add_argument('--prePath', help='prepath to directory contain DGL files', default='.')
     parser.add_argument('--numLabel', help='4label vs 6label', default='6')
+    parser.add_argument('--featureEstimate', help='Zero, Mean, FE', default='FE')
+    parser.add_argument('--crossModal',action='store_true', default=False, help='using crossModal')
+    parser.add_argument('--usingGAT',action='store_true', default=False, help='using GAT')
+    parser.add_argument('--reconstructionLoss', 
+        help='mse, kl, none. unless set rho number for kl loss, using none loss instead',
+        default='none')
     parser.add_argument( "--dataset",
         type=str,
         default="IEMOCAP",
@@ -202,7 +278,11 @@ if __name__ == "__main__":
             'numTest': args.numTest,
             'wFP': args.wFP,
             'numLabel': args.numLabel,
-            'numFP': args.numFP
+            'reconstructionLoss': args.reconstructionLoss,
+            'featureEstimate': args.featureEstimate,
+            'crossModal': args.crossModal,
+            'usingGAT': args.usingGAT,
+            'rho': args.rho
         }
     for test in range(args.numTest):
         if args.seed == 'random':
@@ -218,11 +298,6 @@ if __name__ == "__main__":
             print(info, file = sourceFile)
             sourceFile.close()
                  
-        # dataPath  = './IEMOCAP_features/IEMOCAP_features.pkl'
-        # data = emotionDataset(missing = args.missing, path = dataPath)
-        # trainSet, testSet = data.trainSet, data.testSet
-        # trainLoader = GraphDataLoader( dataset=trainSet, batch_size=args.batchSize, shuffle=True)
-        # testLoader = GraphDataLoader( dataset=testSet, batch_size=args.batchSize)
         numLB = 6
         if args.numLabel =='4':
             numLB = 4
@@ -242,7 +317,11 @@ if __name__ == "__main__":
 
         # create GCN model
         out_size = data.out_size 
-        model = GAT_FP(out_size, args.wFP, args.numFP).to(DEVICE)    
+        model = GAT_FP(out_size, args.wFP, probality = True)
+        for layer in model.children():
+           if hasattr(layer, 'reset_parameters'):
+               layer.reset_parameters()
+        model = model.to(DEVICE)
         print(model)
         # model training
         print("Training...")

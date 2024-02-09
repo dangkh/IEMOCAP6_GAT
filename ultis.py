@@ -12,6 +12,8 @@ from matplotlib.colors import ListedColormap
 from tqdm import tqdm
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 seedList = [1001, 9138, 86503, 37949, 22627, 75258, 94877, 9829, 47702, 15908]
+import os
+import dgl
 
 def seed_everything(seed=seed):
     random.seed(seed)
@@ -21,6 +23,9 @@ def seed_everything(seed=seed):
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    dgl.seed(seed)
+    dgl.random.seed(seed)
 
 cos = nn.CosineSimilarity(dim=0, eps=1e-6)
 
@@ -102,6 +107,7 @@ def vis(info):
     plt.show()
 
 def evaluate(dataloader, model, numLB):
+    model.eval()
     counter = 0
     total = 0
     preds = []
@@ -113,7 +119,6 @@ def evaluate(dataloader, model, numLB):
         trueLabel.extend(labels.cpu().numpy())
         g = g.to(DEVICE)
         with torch.no_grad():
-            model.eval()
             pred = model(g)
             res = torch.argmax(pred, 1)
             res = res.to(DEVICE)
